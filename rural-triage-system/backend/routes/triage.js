@@ -1,12 +1,126 @@
 // Shuruksha Link — Triage route
 // Receives a structured payload (vitals + alerts + voice + OCR), builds a
-// controlled prompt, calls Google Gemini 2.5 Flash, and returns a strict
-// JSON shape consumed by the frontend's TriageResult component.
+// controlled prompt, calls Google Gemini, and returns a strict JSON shape
+// consumed by the frontend's TriageResult component.
+//
+// Resilience:
+//   - Tries models in order: gemini-2.5-flash → gemini-2.0-flash → gemini-1.5-flash
+//   - Retries each model up to 3 times with exponential backoff (1s, 2s, 4s)
+//   - Only retries on transient errors (503, 429, 500, network blips)
+//   - Returns friendly messages to the user; raw errors go to the server log
 
 const express = require('express');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 
 const router = express.Router();
+
+// --- Model fallback chain --------------------------------------------------
+// Ordered from preferred → most compatible. We try each one in turn; only
+// fall back if every retry of the current model fails.
+const MODEL_CHAIN = [
+  'gemini-2.5-flash',
+  'gemini-2.0-flash',
+  'gemini-1.5-flash',
+];
+
+const MAX_RETRIES = 3;
+const BASE_BACKOFF_MS = 1000; // 1s, 2s, 4s
+
+// --- Error classification --------------------------------------------------
+// The GoogleGenerativeAI SDK throws errors with a `.status` and a `.statusText`
+// field on HTTP failures, and plain `Error` objects on network blips.
+// We inspect the message string as a fallback for older SDK behavior.
+function isRetryableError(err) {
+  if (!err) return false;
+  const status = err.status || err.statusCode;
+  if (status === 503 || status === 429 || status === 500 || status === 502) {
+    return true;
+  }
+  const msg = String(err.message || err).toLowerCase();
+  if (!msg) return false;
+  return (
+    msg.includes('503') ||
+    msg.includes('429') ||
+    msg.includes('500') ||
+    msg.includes('unavailable') ||
+    msg.includes('high demand') ||
+    msg.includes('overloaded') ||
+    msg.includes('internal error') ||
+    msg.includes('econnreset') ||
+    msg.includes('etimedout') ||
+    msg.includes('socket hang up') ||
+    msg.includes('network') ||
+    msg.includes('fetch failed')
+  );
+}
+
+function userMessageFor(err) {
+  const status = err?.status || err?.statusCode;
+  const msg = String(err?.message || '').toLowerCase();
+
+  if (status === 429 || msg.includes('429') || msg.includes('quota')) {
+    return 'The AI service has reached its request quota. Please wait a minute and retry.';
+  }
+  if (
+    status === 503 ||
+    msg.includes('503') ||
+    msg.includes('unavailable') ||
+    msg.includes('high demand') ||
+    msg.includes('overloaded')
+  ) {
+    return 'The AI service is temporarily overloaded. Please retry in a moment.';
+  }
+  if (status === 500 || msg.includes('500') || msg.includes('internal error')) {
+    return 'The AI service returned an internal error. Please retry.';
+  }
+  if (
+    msg.includes('econnreset') ||
+    msg.includes('etimedout') ||
+    msg.includes('socket hang up') ||
+    msg.includes('network') ||
+    msg.includes('fetch failed')
+  ) {
+    return 'Network problem reaching the AI service. Please check connectivity and retry.';
+  }
+  if (status === 401 || status === 403 || msg.includes('api key')) {
+    return 'Server is not authorized to reach the AI service. Please contact the administrator.';
+  }
+  return 'Triage service is temporarily unavailable. Please retry shortly.';
+}
+
+// --- Retry helper ----------------------------------------------------------
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function withRetry(fn, label) {
+  // Try the call up to MAX_RETRIES times with exponential backoff.
+  // Returns the successful result, or throws the LAST error if every attempt failed.
+  let lastErr;
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      const result = await fn();
+      if (attempt > 1) {
+        console.log(`[triage] ${label} succeeded on attempt ${attempt}.`);
+      }
+      return result;
+    } catch (err) {
+      lastErr = err;
+      if (!isRetryableError(err) || attempt === MAX_RETRIES) {
+        // Either a non-retryable error, or we've burned all retries.
+        throw err;
+      }
+      const delay = BASE_BACKOFF_MS * Math.pow(2, attempt - 1); // 1s, 2s, 4s
+      console.warn(
+        `[triage] ${label} attempt ${attempt} failed (${err.status || ''} ${err.message || err}). ` +
+        `Retrying in ${delay}ms…`
+      );
+      await sleep(delay);
+    }
+  }
+  // Unreachable, but keep TS-style safety.
+  throw lastErr;
+}
 
 // --- JSON schema enforced via Gemini's responseSchema -----------------------
 // Keeps the model honest about the keys the UI needs.
@@ -168,26 +282,60 @@ router.post('/', async (req, res) => {
 
   try {
     const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({
-      model: 'gemini-2.5-flash',
-      generationConfig: {
-        responseMimeType: 'application/json',
-        responseSchema: TRIAGE_SCHEMA,
-        temperature: 0.2,
-      },
-    });
-
     const prompt = buildPrompt({ vitals, alerts, voiceTranscript, ocrText });
-    const result = await model.generateContent(prompt);
-    const raw = result?.response?.text?.() || '';
+
+    let raw = '';
+    let winningModel = null;
+    let lastErr = null;
+
+    // Walk the model chain. For each model, retry with backoff. Fall back to
+    // the next model only if every retry of the current one is exhausted.
+    for (const modelName of MODEL_CHAIN) {
+      const model = genAI.getGenerativeModel({
+        model: modelName,
+        generationConfig: {
+          responseMimeType: 'application/json',
+          responseSchema: TRIAGE_SCHEMA,
+          temperature: 0.2,
+        },
+      });
+
+      try {
+        const result = await withRetry(
+          () => model.generateContent(prompt),
+          `${modelName}`
+        );
+        raw = result?.response?.text?.() || '';
+        winningModel = modelName;
+        break;
+      } catch (err) {
+        lastErr = err;
+        console.warn(
+          `[triage] All ${MAX_RETRIES} retries of ${modelName} exhausted. ` +
+          `${MODEL_CHAIN.indexOf(modelName) === MODEL_CHAIN.length - 1 ? 'No more fallbacks.' : 'Falling back to next model.'}`
+        );
+        // Loop continues to the next model.
+      }
+    }
+
+    if (!winningModel) {
+      // Every model in the chain failed.
+      console.error('[triage] All models in fallback chain failed. Last error:', lastErr);
+      return res.status(502).json({
+        error: userMessageFor(lastErr),
+      });
+    }
 
     let parsed;
     try {
       parsed = JSON.parse(raw);
     } catch (err) {
-      console.error('[triage] Failed to parse Gemini JSON:', raw);
+      console.error(
+        `[triage] ${winningModel} returned non-JSON (first 200 chars):`,
+        raw.slice(0, 200)
+      );
       return res.status(502).json({
-        error: 'Gemini returned a non-JSON response. Please retry.',
+        error: 'The AI service returned an unexpected response. Please retry.',
       });
     }
 
@@ -207,13 +355,13 @@ router.post('/', async (req, res) => {
 
     const safe = applySafetyFloor(verdict, alerts || []);
 
-    return res.json({ ok: true, verdict: safe });
+    console.log(`[triage] verdict served via ${winningModel} (severity=${safe.severity}).`);
+    return res.json({ ok: true, verdict: safe, model: winningModel });
   } catch (err) {
-    console.error('[triage] Gemini call failed:', err);
-    return res.status(502).json({
-      error:
-        'Triage service is temporarily unavailable. ' +
-        (err?.message || 'Unknown error from upstream model.'),
+    // Should be rare — non-Gemini error (e.g. prompt build failure).
+    console.error('[triage] Unexpected handler error:', err);
+    return res.status(500).json({
+      error: userMessageFor(err),
     });
   }
 });
