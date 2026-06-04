@@ -1,10 +1,12 @@
 // Shuruksha Link — Backend API
-// Minimal Express server: Phase 2 foundation. Gemini endpoints added later.
+// Express server. Health route + Gemini-powered /api/triage (POST).
 
 require('dotenv').config();
 
 const express = require('express');
 const cors = require('cors');
+
+const triageRouter = require('./routes/triage');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -18,13 +20,23 @@ app.get('/', (req, res) => {
   res.json({
     status: 'ok',
     service: 'Shuruksha Link API',
-    message: 'Backend is running. Triage endpoint coming in next step.'
+    message: 'Backend is running. POST /api/triage to request a Gemini verdict.',
   });
 });
 
-// Placeholder for the Gemini triage route (wired in a later step)
-app.get('/api/triage', (req, res) => {
-  res.json({ message: 'Triage endpoint placeholder. Not yet implemented.' });
+// Triage route
+app.use('/api/triage', triageRouter);
+
+// 404 fallback
+app.use((req, res) => {
+  res.status(404).json({ error: 'Not found' });
+});
+
+// Centralized error handler
+// eslint-disable-next-line no-unused-vars
+app.use((err, req, res, next) => {
+  console.error('[server] Unhandled error:', err);
+  res.status(500).json({ error: 'Internal server error' });
 });
 
 // Start server

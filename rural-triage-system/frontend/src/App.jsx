@@ -1,9 +1,12 @@
 // Shuruksha Link — Frontend root component
-// Layout: gradient header → status pill → 2-column dashboard (Phase 3).
-// Vitals module is wired; voice, OCR, and Gemini features are not yet built.
+// Layout: gradient header → status pill → 2-column dashboard.
+// Left column  : VitalsForm (intake + voice + OCR) + Process Triage button.
+// Right column : AI Assistant panel → TriageResult (empty/loading/error/data).
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import VitalsForm from './components/VitalsForm.jsx';
+import TriageResult from './components/TriageResult.jsx';
+import { checkVitals } from './utils/checkVitals.js';
 
 const EMPTY_VITALS = {
   bp: '',
@@ -24,10 +27,18 @@ function getStatusMeta(message) {
   return { tone: 'offline', dot: 'bg-rose-500', text: 'text-rose-700', chip: 'bg-rose-50 border-rose-200' };
 }
 
+const INITIAL_TRIAGE_STATE = { status: 'idle' };
+
 export default function App() {
   const [apiStatus, setApiStatus] = useState('checking…');
   const [vitals, setVitals] = useState(EMPTY_VITALS);
+  const [voiceText, setVoiceText] = useState('');
+  const [ocrText, setOcrText] = useState('');
+  const [triageState, setTriageState] = useState(INITIAL_TRIAGE_STATE);
   const status = getStatusMeta(apiStatus);
+
+  // Recompute alerts in the parent so they can be sent with the triage request.
+  const alerts = useMemo(() => checkVitals(vitals), [vitals]);
 
   useEffect(() => {
     // Smoke test: confirm the backend is reachable
@@ -36,6 +47,45 @@ export default function App() {
       .then((data) => setApiStatus(data.message || 'connected'))
       .catch(() => setApiStatus('unreachable (is the backend running on :5000?)'));
   }, []);
+
+  const handleProcessTriage = async () => {
+    setTriageState({ status: 'loading' });
+    try {
+      const res = await fetch('http://localhost:5000/api/triage', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          vitals,
+          alerts,
+          voiceTranscript: voiceText,
+          ocrText,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setTriageState({
+          status: 'error',
+          error: data?.error || `Request failed with status ${res.status}.`,
+        });
+        return;
+      }
+      if (!data?.verdict) {
+        setTriageState({
+          status: 'error',
+          error: 'Server returned an empty verdict. Please retry.',
+        });
+        return;
+      }
+      setTriageState({ status: 'success', verdict: data.verdict });
+    } catch (err) {
+      console.error('[triage] request failed:', err);
+      setTriageState({
+        status: 'error',
+        error:
+          'Could not reach the triage service. Make sure the backend is running on port 5000.',
+      });
+    }
+  };
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-sky-50 to-cyan-50">
@@ -90,17 +140,24 @@ export default function App() {
         {/* Two-column dashboard: left = intake, right = AI assistant panel */}
         <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
           <div className="lg:col-span-3 space-y-6">
-            <VitalsForm vitals={vitals} onChange={setVitals} />
+            <VitalsForm
+              vitals={vitals}
+              onChange={setVitals}
+              onVoiceChange={setVoiceText}
+              onOcrChange={setOcrText}
+            />
 
             <button
               type="button"
-              onClick={() => { /* wired in a later step */ }}
+              onClick={handleProcessTriage}
+              disabled={triageState.status === 'loading'}
               className="
                 w-full h-14 sm:h-16
                 rounded-2xl
                 bg-gradient-to-r from-sky-600 to-cyan-600
                 hover:from-sky-700 hover:to-cyan-700
                 active:scale-[0.99]
+                disabled:from-slate-300 disabled:to-slate-400 disabled:cursor-not-allowed
                 text-white text-lg sm:text-xl font-bold tracking-wide
                 shadow-lg shadow-sky-600/25 hover:shadow-xl hover:shadow-sky-600/30
                 focus:outline-none focus:ring-4 focus:ring-sky-300
@@ -109,23 +166,38 @@ export default function App() {
               "
               aria-label="Process Triage Request"
             >
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2.2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                className="h-6 w-6"
-                aria-hidden="true"
-              >
-                <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" />
-              </svg>
-              Process Triage Request
-              <span className="text-sm sm:text-base font-medium opacity-80">
-                / ট্রায়াজ শুরু করুন
-              </span>
+              {triageState.status === 'loading' ? (
+                <>
+                  <span
+                    className="h-5 w-5 rounded-full border-2 border-white/40 border-t-white animate-spin"
+                    aria-hidden="true"
+                  />
+                  Analyzing…
+                  <span className="text-sm sm:text-base font-medium opacity-80">
+                    / বিশ্লেষণ চলছে
+                  </span>
+                </>
+              ) : (
+                <>
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2.2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    className="h-6 w-6"
+                    aria-hidden="true"
+                  >
+                    <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" />
+                  </svg>
+                  Process Triage Request
+                  <span className="text-sm sm:text-base font-medium opacity-80">
+                    / ট্রায়াজ শুরু করুন
+                  </span>
+                </>
+              )}
             </button>
           </div>
 
@@ -156,54 +228,23 @@ export default function App() {
                   Triage Output
                 </h2>
                 <p className="mt-1 text-sm text-sky-100/80">
-                  Gemini reasoning, voice transcript, and document scan will appear here.
+                  Gemini reasoning over vitals, voice symptoms, and document scan.
                 </p>
               </div>
 
-              <div className="relative mt-8 flex-1 rounded-xl border border-white/10 bg-white/5 backdrop-blur p-5 flex flex-col">
-                <div className="flex items-start gap-3">
-                  <div className="h-9 w-9 shrink-0 rounded-full bg-gradient-to-br from-cyan-400 to-sky-400 grid place-items-center text-slate-900 font-bold">
-                    AI
-                  </div>
-                  <div className="rounded-2xl rounded-tl-sm bg-white/10 px-4 py-3 text-sm leading-relaxed text-sky-50">
-                    <p className="font-medium text-white">Ready when you are.</p>
-                    <p className="mt-1 text-sky-100/80">
-                      Enter vitals on the left, then tap{' '}
-                      <span className="font-semibold text-cyan-200">Process Triage Request</span>{' '}
-                      to receive a color-coded triage verdict, differential diagnoses, and first-aid steps.
-                    </p>
-                  </div>
-                </div>
+              <div className="relative mt-6 flex-1 rounded-xl border border-white/10 bg-white/5 backdrop-blur p-5 overflow-y-auto">
+                <TriageResult state={triageState} />
+              </div>
 
-                <ul className="mt-6 space-y-2.5 text-sm text-sky-100/90">
-                  <li className="flex items-center gap-2.5">
-                    <span className="h-1.5 w-1.5 rounded-full bg-cyan-300" aria-hidden="true" />
-                    Color-coded safety verdict
-                  </li>
-                  <li className="flex items-center gap-2.5">
-                    <span className="h-1.5 w-1.5 rounded-full bg-cyan-300" aria-hidden="true" />
-                    Differential diagnoses
-                  </li>
-                  <li className="flex items-center gap-2.5">
-                    <span className="h-1.5 w-1.5 rounded-full bg-cyan-300" aria-hidden="true" />
-                    Localized first-aid steps
-                  </li>
-                  <li className="flex items-center gap-2.5">
-                    <span className="h-1.5 w-1.5 rounded-full bg-cyan-300" aria-hidden="true" />
-                    Physician referral timeline
-                  </li>
-                </ul>
-
-                <div className="mt-auto pt-6 text-xs text-sky-100/60">
-                  Phase 3 · Triage reasoning will be wired in Step 11.
-                </div>
+              <div className="relative mt-4 pt-4 border-t border-white/10 text-xs text-sky-100/60">
+                Phase 4 · Gemini 2.5 Flash · responseSchema-enforced JSON · safety floor applied server-side.
               </div>
             </section>
           </aside>
         </div>
 
         <footer className="mt-8 text-center text-xs text-slate-500">
-          Shuruksha Link · Step 1: Vitals Intake · Built for Community Health Workers
+          Shuruksha Link · Built for Community Health Workers · Not a substitute for a physician.
         </footer>
       </div>
     </div>

@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   useOCR,
   ACCEPTED_EXTENSIONS,
@@ -48,7 +48,7 @@ function StatusPill({ status, progress }) {
   );
 }
 
-export default function DocumentScan() {
+export default function DocumentScan({ onTextChange }) {
   const { status, progress, text, error, recognize, reset } = useOCR();
   const inputRef = useRef(null);
   const [previewUrl, setPreviewUrl] = useState(null);
@@ -56,6 +56,13 @@ export default function DocumentScan() {
   const [dragOver, setDragOver] = useState(false);
 
   const isBusy = status === 'loading' || status === 'recognizing';
+
+  // Push OCR text up to the parent so the triage engine can read it.
+  useEffect(() => {
+    if (typeof onTextChange === 'function') {
+      onTextChange(text || '');
+    }
+  }, [text, onTextChange]);
 
   const handleFile = (file) => {
     if (!file) return;

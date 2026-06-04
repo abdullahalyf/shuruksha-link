@@ -58,7 +58,7 @@ const FIELDS = [
   },
 ];
 
-export default function VitalsForm({ vitals, onChange }) {
+export default function VitalsForm({ vitals, onChange, onVoiceChange, onOcrChange }) {
   // Recompute alerts whenever any field changes. With 5 inputs this is
   // cheap enough to run on every keystroke.
   const alerts = useMemo(() => checkVitals(vitals), [vitals]);
@@ -265,8 +265,8 @@ export default function VitalsForm({ vitals, onChange }) {
         )}
       </div>
 
-      <VoiceCapture />
-      <DocumentScan />
+      <VoiceCapture onTranscriptChange={onVoiceChange} />
+      <DocumentScan onTextChange={onOcrChange} />
     </section>
   );
 }

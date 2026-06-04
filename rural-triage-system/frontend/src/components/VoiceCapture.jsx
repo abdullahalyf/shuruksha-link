@@ -1,11 +1,12 @@
 // VoiceCapture — UI for the Web Speech Recognition API.
 // Self-contained: uses the useSpeechRecognition hook for all state.
-// Props: nothing required. Transcript is local state for now (Step 9 scope).
+// Optional props: `onTranscriptChange(value)` keeps the parent in sync
+// so the triage engine can consume the latest text.
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { SUPPORTED_LANGS, useSpeechRecognition } from '../hooks/useSpeechRecognition.js';
 
-export default function VoiceCapture() {
+export default function VoiceCapture({ onTranscriptChange }) {
   const [lang, setLang] = useState('en-US');
   const {
     supported,
@@ -18,6 +19,13 @@ export default function VoiceCapture() {
     reset,
     setLang: applyLang,
   } = useSpeechRecognition({ lang });
+
+  // Bubble transcript changes up to the parent (App.jsx).
+  useEffect(() => {
+    if (typeof onTranscriptChange === 'function') {
+      onTranscriptChange(transcript || '');
+    }
+  }, [transcript, onTranscriptChange]);
 
   const handleLangChange = (e) => {
     const next = e.target.value;
