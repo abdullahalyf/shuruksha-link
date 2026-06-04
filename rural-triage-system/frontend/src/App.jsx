@@ -233,7 +233,13 @@ export default function App() {
               </div>
 
               <div className="relative mt-6 flex-1 rounded-xl border border-white/10 bg-white/5 backdrop-blur p-5 overflow-y-auto">
-                <TriageResult state={triageState} />
+                <TriageResult
+                  state={triageState}
+                  vitals={vitals}
+                  alerts={alerts}
+                  voiceText={voiceText}
+                  ocrText={ocrText}
+                />
               </div>
 
               <div className="relative mt-4 pt-4 border-t border-white/10 text-xs text-sky-100/60">

@@ -4,6 +4,11 @@
 //
 //   { status: 'idle' | 'loading' | 'error' | 'success',
 //     verdict?: TriageVerdict, error?: string }
+//
+// Plus the raw inputs needed to generate the physician PDF on demand:
+//   vitals, alerts, voiceText, ocrText.
+
+import { useState } from 'react';
 
 const SEVERITY_META = {
   LOW: {
@@ -170,9 +175,106 @@ function EmptyState() {
   );
 }
 
+// --- PDF download button --------------------------------------------------
+
+function DownloadPhysicianPdf({
+  verdict,
+  vitals,
+  alerts,
+  voiceText,
+  ocrText,
+}) {
+  const [busy, setBusy] = useState(false);
+  const [filename, setFilename] = useState(null);
+  const [err, setErr] = useState(null);
+
+  const handleClick = async () => {
+    setBusy(true);
+    setErr(null);
+    try {
+      // Lazy-load jspdf so the initial bundle stays small and the helper
+      // code-split is only triggered on first use.
+      const { generatePhysicianPdf } = await import('../utils/generatePhysicianPdf');
+      const { filename: name } = generatePhysicianPdf({
+        verdict,
+        vitals,
+        alerts,
+        voiceTranscript: voiceText,
+        ocrText,
+      });
+      setFilename(name);
+    } catch (e) {
+      console.error('PDF export failed', e);
+      setErr(e?.message || 'PDF generation failed.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="flex flex-col items-end gap-1">
+      <button
+        type="button"
+        onClick={handleClick}
+        disabled={busy}
+        className={
+          'inline-flex items-center gap-2 rounded-full px-4 py-2 text-xs font-bold uppercase tracking-wider ' +
+          'bg-white text-slate-900 ring-1 ring-white/20 shadow-sm ' +
+          'hover:bg-cyan-50 active:scale-[0.98] transition ' +
+          'disabled:opacity-60 disabled:cursor-not-allowed'
+        }
+        aria-label="Download physician PDF report"
+      >
+        {busy ? (
+          <>
+            <span
+              className="h-3.5 w-3.5 rounded-full border-2 border-slate-400 border-t-slate-900 animate-spin"
+              aria-hidden="true"
+            />
+            Building PDF…
+          </>
+        ) : (
+          <>
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2.2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              className="h-3.5 w-3.5"
+              aria-hidden="true"
+            >
+              <path d="M12 3v12" />
+              <polyline points="7 10 12 15 17 10" />
+              <line x1="5" y1="21" x2="19" y2="21" />
+            </svg>
+            Download Physician PDF
+          </>
+        )}
+      </button>
+      {filename && !busy && (
+        <p className="text-[10px] font-medium text-emerald-200/90">
+          Saved as <span className="font-mono">{filename}</span>
+        </p>
+      )}
+      {err && !busy && (
+        <p className="text-[10px] font-medium text-rose-200/90">{err}</p>
+      )}
+    </div>
+  );
+}
+
 // --- Main export ----------------------------------------------------------
 
-export default function TriageResult({ state }) {
+export default function TriageResult({
+  state,
+  vitals = {},
+  alerts = [],
+  voiceText = '',
+  ocrText = '',
+}) {
   const status = state?.status || 'idle';
 
   if (status === 'loading') {
@@ -205,6 +307,14 @@ export default function TriageResult({ state }) {
             {v.summary || 'No summary provided.'}
           </p>
         </div>
+
+        <DownloadPhysicianPdf
+          verdict={v}
+          vitals={vitals}
+          alerts={alerts}
+          voiceText={voiceText}
+          ocrText={ocrText}
+        />
 
         <SectionCard
           title="Possible conditions"
