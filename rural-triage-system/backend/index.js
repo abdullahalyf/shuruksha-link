@@ -1,5 +1,7 @@
 // Shuruksha Link - Backend API
-// Express server. Health routes + Gemini-powered /api/triage (POST).
+// Express server. Health routes + Gemini-powered /api/triage (POST) and
+// /api/translate (POST, used by the PDF export pipeline to convert
+// Bengali voice/OCR text into English before embedding in the report).
 
 require('dotenv').config();
 
@@ -7,6 +9,7 @@ const express = require('express');
 const cors = require('cors');
 
 const triageRouter = require('./routes/triage');
+const translateRouter = require('./routes/translate');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -45,7 +48,8 @@ app.get('/', (req, res) => {
     environment: ENV,
     uptime_seconds: Math.round((Date.now() - BOOT_TIME) / 1000),
     message:
-      'Backend is running. POST /api/triage to request a Gemini verdict.',
+      'Backend is running. POST /api/triage to request a Gemini verdict. ' +
+      'POST /api/translate to translate clinical text to English for PDF export.',
   });
 });
 
@@ -66,6 +70,10 @@ app.get('/api/healthz', (req, res) => {
 
 // Triage route
 app.use('/api/triage', triageRouter);
+
+// Translate route — used by frontend PDF export to localize voice/OCR
+// text into English before rendering the WinAnsi-only jsPDF report.
+app.use('/api/translate', translateRouter);
 
 // 404 fallback
 app.use((req, res) => {

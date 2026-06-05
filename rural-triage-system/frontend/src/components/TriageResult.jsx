@@ -13,6 +13,7 @@ import LabFindings from './LabFindings.jsx';
 import FirstAidPanel from './FirstAidPanel.jsx';
 import EmergencyOverrideCard from './EmergencyOverrideCard.jsx';
 import ReferralCard from './ReferralCard.jsx';
+import { translateFields } from '../utils/translateToEnglish';
 
 const SEVERITY_META = {
   LOW: {
@@ -194,13 +195,30 @@ function DownloadPhysicianPdf({
   emergencyOverride = null,  referralPlan = null,  outputLanguage = 'en',
 }) {
   const [busy, setBusy] = useState(false);
+  const [phase, setPhase] = useState('idle'); // 'idle' | 'translating' | 'building' | 'done' | 'error'
   const [filename, setFilename] = useState(null);
   const [err, setErr] = useState(null);
 
   const handleClick = async () => {
     setBusy(true);
     setErr(null);
+    setPhase('translating');
     try {
+      // Step 24.1 — the Physician PDF is English-only (jsPDF's bundled
+      // Helvetica is WinAnsi and would render Bengali as mojibake). When
+      // the CHW captured voice notes or scanned a prescription in Bengali,
+      // translate them to English first so the PDF embeds clean ASCII.
+      // Best-effort: translateFields falls back to the original text on
+      // any network/parse failure, so a translation outage never blocks
+      // the export.
+      const translated = await translateFields(
+        { voiceText, ocrText },
+        { sourceLanguage: 'auto' }
+      );
+      const voiceTranscriptEn = translated.voiceText ?? voiceText;
+      const ocrTextEn = translated.ocrText ?? ocrText;
+
+      setPhase('building');
       // Lazy-load jspdf so the initial bundle stays small and the helper
       // code-split is only triggered on first use.
       const { generatePhysicianPdf } = await import('../utils/generatePhysicianPdf');
@@ -208,20 +226,22 @@ function DownloadPhysicianPdf({
         verdict,
         vitals,
         alerts,
-        voiceTranscript: voiceText,
-        ocrText,
+        voiceTranscript: voiceTranscriptEn,
+        ocrText: ocrTextEn,
         labFindings,
         labAlerts,
         firstAid,
         patientInfo,
         emergencyOverride,
         referralPlan,
-        outputLanguage,
+        outputLanguage: 'en', // PDF is always English
       });
       setFilename(name);
+      setPhase('done');
     } catch (e) {
       console.error('PDF export failed', e);
       setErr(e?.message || 'PDF generation failed.');
+      setPhase('error');
     } finally {
       setBusy(false);
     }
@@ -247,7 +267,7 @@ function DownloadPhysicianPdf({
               className="h-3.5 w-3.5 rounded-full border-2 border-slate-400 border-t-slate-900 animate-spin"
               aria-hidden="true"
             />
-            Building PDF…
+            {phase === 'translating' ? 'Translating…' : 'Building PDF…'}
           </>
         ) : (
           <>

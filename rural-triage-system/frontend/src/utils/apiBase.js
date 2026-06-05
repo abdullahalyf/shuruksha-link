@@ -30,6 +30,10 @@ export function triageUrl() {
   return apiUrl('/api/triage');
 }
 
+export function translateUrl() {
+  return apiUrl('/api/translate');
+}
+
 export function rootHealthUrl() {
   return apiUrl('/');
 }
