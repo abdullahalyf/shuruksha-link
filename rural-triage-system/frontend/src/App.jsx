@@ -9,7 +9,7 @@ import TriageResult from './components/TriageResult.jsx';
 import CaseHistory from './components/CaseHistory.jsx';
 import { checkVitals } from './utils/checkVitals.js';
 import { parseMedicalReport } from './utils/parseMedicalReport.js';
-import { rootHealthUrl, triageUrl } from './utils/apiBase.js';
+import { healthUrl, triageUrl } from './utils/apiBase.js';
 import {
   loadHistory,
   saveCase,
@@ -93,11 +93,33 @@ export default function App() {
   useEffect(() => {
     // Smoke test: confirm the backend is reachable. The URL comes from
     // src/utils/apiBase.js (VITE_API_BASE_URL) so it works the same in
-    // dev (Vite proxy), staging, and production.
-    fetch(rootHealthUrl())
-      .then((res) => res.json())
-      .then((data) => setApiStatus(data.message || 'connected'))
-      .catch(() => setApiStatus('unreachable (is the backend running on :5000?)'));
+    // dev (Vite proxy), staging, and production. We hit the dedicated
+    // /api/healthz endpoint (not the marketing "/") and gate the badge
+    // on a structured `status: "ok"` flag, never on a free-text message.
+    const url = healthUrl();
+    console.log('[health-check] GET', url);
+    fetch(url)
+      .then((res) => {
+        console.log('[health-check] HTTP', res.status, res.statusText);
+        if (!res.ok) {
+          throw new Error(`HTTP ${res.status}`);
+        }
+        return res.json();
+      })
+      .then((data) => {
+        console.log('[health-check] response payload:', data);
+        if (data && data.status === 'ok') {
+          setApiStatus('connected');
+          return;
+        }
+        setApiStatus(
+          `unreachable: unexpected payload (status=${data && data.status})`
+        );
+      })
+      .catch((err) => {
+        console.warn('[health-check] fetch failed:', err);
+        setApiStatus('unreachable (is the backend running on :5000?)');
+      });
   }, []);
 
   const handleProcessTriage = async () => {
