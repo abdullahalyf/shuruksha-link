@@ -14,20 +14,21 @@
 //
 //   Page 1
 //     -1. EMERGENCY OVERRIDE     (red callout — only when offline engine triggered; Step 22)
-//      0. PATIENT INFORMATION     (Name | Age | Gender | Phone | Address — black/gray table)
-//     1. PATIENT VITALS          (Parameter | Value | Unit | Status, pills)
-//     2. ANOMALY FINDINGS        (numbered list)
-//     3. LAB FINDINGS            (Parameter | Result | Unit | Status, pills)
-//     4. LAB ALERTS              (numbered list)
+//      0. REFERRAL PLAN          (Facility | Urgency | Transport | Checklist — only when referralPlan is supplied; Step 23)
+//      1. PATIENT INFORMATION     (Name | Age | Gender | Phone | Address — black/gray table)
+//     2. PATIENT VITALS          (Parameter | Value | Unit | Status, pills)
+//     3. ANOMALY FINDINGS        (numbered list)
+//     4. LAB FINDINGS            (Parameter | Result | Unit | Status, pills)
+//     5. LAB ALERTS              (numbered list)
 //
 //   Page 2
-//     5. CLINICAL SUMMARY        (paragraph)
-//     6. POSSIBLE CONDITIONS     (numbered list)
-//     7. RECOMMENDED ACTIONS     (numbered list)
-//     8. FIRST AID RECOMMENDATIONS (checkmark list)
-//     9. REFERRAL RECOMMENDATION (paragraph)
-//    10. VOICE TRANSCRIPT / SYMPTOMS NOTES (monospace bordered block)
-//    11. OCR EXTRACTED TEXT      (monospace bordered block)
+//     6. CLINICAL SUMMARY        (paragraph)
+//     7. POSSIBLE CONDITIONS     (numbered list)
+//     8. RECOMMENDED ACTIONS     (numbered list)
+//     9. FIRST AID RECOMMENDATIONS (checkmark list)
+//    10. REFERRAL RECOMMENDATION (paragraph)
+//    11. VOICE TRANSCRIPT / SYMPTOMS NOTES (monospace bordered block)
+//    12. OCR EXTRACTED TEXT      (monospace bordered block)
 //
 //   Footer (every page)
 //     Shuruksha Link  ·  Confidential Clinical Report  ·  Page X of Y
@@ -482,6 +483,132 @@ function drawEmergencyOverrideBlock(doc, override, y) {
   return y + totalH + 4;
 }
 
+// --- Step 23: REFERRAL PLAN block (Section 0 on page 1) -----------------
+// Structured 5-tier referral plan. Renders Facility / Urgency / Transportation
+// / Recommendation / Transfer Checklist as a black/gray clinical block that
+// matches the patient-information table aesthetic. Color is reserved for a
+// thin left rule tinted to the tier's severity, and the level badge — never
+// a flood fill. Null/undefined plan → no-op (returns y unchanged).
+function drawReferralPlanBlock(doc, plan, y) {
+  if (!plan || typeof plan !== 'object') return y;
+
+  const level = String(plan.level || 'LOW').toUpperCase();
+  const facilityType = String(plan.facilityType || '—').trim() || '—';
+  const urgency = String(plan.urgency || '—').trim() || '—';
+  const transportation = String(plan.transportation || '—').trim() || '—';
+  const recommendation = String(plan.recommendation || '').trim();
+  const checklist = Array.isArray(plan.checklist) ? plan.checklist : [];
+
+  // Tier accent color — only used for the left rule + level badge text.
+  const accent =
+    level === 'EMERGENCY' || level === 'CRITICAL' ? COLOR.critical
+      : level === 'HIGH'   ? COLOR.high
+      : level === 'MEDIUM' ? COLOR.medium
+      :                       COLOR.low;
+
+  // Section title row
+  y = drawSectionTitle(doc, y, 'Referral Plan');
+
+  // Compute body height up front so we can draw the frame once.
+  // Layout (inside the frame):
+  //   level strip  : 8mm  (badge + label)
+  //   meta rows    : 3 × 6 = 18mm  (Facility / Urgency / Transport)
+  //   recommendation paragraph : variable
+  //   checklist    : header 5 + items * 4.6
+  const innerX = MARGIN_X + 6;
+  const innerW = CONTENT_W - 12;
+  const stripH = 8;
+  const metaRowH = 6;
+  const recLines = recommendation
+    ? doc.splitTextToSize(recommendation, innerW)
+    : [];
+  const recH = recommendation ? (recLines.length * 4.6 + 6) : 0;
+  const clHeaderH = checklist.length > 0 ? 6 : 0;
+  const clItemH = checklist.length * 4.4;
+  const padTop = 3;
+  const padBottom = 4;
+  const bodyH = stripH + metaRowH * 3 + recH + clHeaderH + clItemH;
+  const totalH = padTop + bodyH + padBottom;
+
+  // Light wash background
+  setFill(doc, [248, 250, 252]); // slate-50
+  setDraw(doc, COLOR.rule);
+  doc.setLineWidth(0.3);
+  doc.rect(MARGIN_X, y, CONTENT_W, totalH, 'FD');
+
+  // Thick left rule tinted to tier
+  setFill(doc, accent);
+  doc.rect(MARGIN_X, y, 1.6, totalH, 'F');
+
+  let cursor = y + padTop;
+
+  // --- Level strip
+  setText(doc, accent);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9);
+  doc.text('REFERRAL LEVEL', innerX, cursor + 3.2);
+
+  setText(doc, COLOR.ink);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(10.5);
+  doc.text(level, innerX + 30, cursor + 3.2);
+  cursor += stripH;
+
+  // --- Meta rows: Facility / Urgency / Transportation
+  const metaRows = [
+    { label: 'Facility',  value: facilityType },
+    { label: 'Urgency',   value: urgency },
+    { label: 'Transport', value: transportation },
+  ];
+  setText(doc, COLOR.inkMuted);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9);
+  metaRows.forEach((row) => {
+    doc.text(row.label, innerX, cursor + 4);
+    setText(doc, COLOR.ink);
+    doc.setFont('helvetica', 'normal');
+    const valLines = doc.splitTextToSize(String(row.value), innerW - 32);
+    doc.text(valLines, innerX + 32, cursor + 4);
+    cursor += Math.max(metaRowH, valLines.length * 4.4 + 1);
+  });
+
+  // --- Recommendation paragraph
+  if (recommendation) {
+    cursor += 1;
+    setText(doc, COLOR.inkMuted);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(8.5);
+    doc.text('RECOMMENDATION', innerX, cursor);
+    cursor += 4;
+    setText(doc, COLOR.ink);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9.5);
+    doc.text(recLines, innerX, cursor);
+    cursor += recLines.length * 4.6 + 2;
+  }
+
+  // --- Transfer checklist
+  if (checklist.length > 0) {
+    setText(doc, COLOR.inkMuted);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(8.5);
+    doc.text('TRANSFER CHECKLIST', innerX, cursor);
+    cursor += 4.6;
+
+    setText(doc, COLOR.ink);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9.5);
+    checklist.forEach((item) => {
+      const lines = doc.splitTextToSize(String(item), innerW - 6);
+      doc.text('•', innerX, cursor);
+      doc.text(lines, innerX + 4, cursor);
+      cursor += lines.length * 4.4;
+    });
+  }
+
+  return y + totalH + 4;
+}
+
 // --- Section 0: PATIENT INFORMATION (table) ------------------------------
 // Step 21 — demographics captured at intake. Pure black/gray print, no
 // Bengali, no color. Two-column layout: bold slate-600 label, regular
@@ -730,12 +857,12 @@ function drawMonoBlock(doc, label, text, y) {
  * tables, thin rules, monochrome body, and color used ONLY for the
  * severity strip and status pills.
  *
- * Section order (12 sections total):
- *   Page 1 — 0 Patient Information, 1 Patient Vitals, 2 Anomaly Findings,
- *            3 Lab Findings, 4 Lab Alerts
- *   Page 2 — 5 Clinical Summary, 6 Possible Conditions, 7 Recommended Actions,
- *            8 First Aid Recommendations, 9 Referral Recommendation,
- *           10 Voice Transcript, 11 OCR Extracted Text
+ * Section order (13 sections total):
+ *   Page 1 — 0 Referral Plan (Step 23, conditional), 1 Patient Information,
+ *            2 Patient Vitals, 3 Anomaly Findings, 4 Lab Findings, 5 Lab Alerts
+ *   Page 2 — 6 Clinical Summary, 7 Possible Conditions, 8 Recommended Actions,
+ *            9 First Aid Recommendations, 10 Referral Recommendation,
+ *           11 Voice Transcript, 12 OCR Extracted Text
  *
  * @param {object} params
  * @param {object} params.verdict          - AI verdict (severity, summary, …)
@@ -755,6 +882,17 @@ function drawMonoBlock(doc, label, text, y) {
  *                                           a red callout is rendered at the very
  *                                           top of page 1 (above the severity strip
  *                                           and Section 0). Null/undefined = hidden.
+ * @param {object} [params.referralPlan]    - { level, facilityType, urgency,
+ *                                           transportation, recommendation,
+ *                                           checklist } from the Smart Referral
+ *                                           Directory (Step 23). When supplied,
+ *                                           a structured block is rendered as
+ *                                           Section 0 on page 1, between the
+ *                                           emergency override callout (if any)
+ *                                           and Patient Information. When the
+ *                                           Emergency Override fires, its tier
+ *                                           is forced to EMERGENCY so the block
+ *                                           always matches the red callout.
  * @param {string} [params.outputLanguage] - Accepted for API compatibility.
  *                                           The PDF is always English.
  * @returns {{ filename: string, pageCount: number }}
@@ -770,6 +908,7 @@ export function generatePhysicianPdf({
   firstAid = null,
   patientInfo = {},
   emergencyOverride = null,
+  referralPlan = null,
   outputLanguage = 'en', // accepted but ignored — PDF is English-only
 } = {}) {
   if (!verdict) {
@@ -781,7 +920,7 @@ export function generatePhysicianPdf({
   const reportId = `SL-${generatedAt.getTime()}`;
 
   // =====================================================================
-  // PAGE 1 — header, severity strip, sections 0..4
+  // PAGE 1 — header, severity strip, sections 0..5
   // =====================================================================
   drawHeader(doc, {
     severity: verdict.severity,
@@ -798,31 +937,41 @@ export function generatePhysicianPdf({
     y = drawEmergencyOverrideBlock(doc, emergencyOverride, y);
   }
 
-  // 0. PATIENT INFORMATION (Step 21)
+  // 0. REFERRAL PLAN (Step 23) — structured 5-tier plan from the Smart
+  // Referral Directory. Renders between the override callout and Patient
+  // Information. When the Emergency Override is active, getReferralRecommendation
+  // forces this to the EMERGENCY tier, so the colored left rule matches
+  // the red callout above it.
+  if (referralPlan) {
+    y = ensureSpace(doc, y, 4);
+    y = drawReferralPlanBlock(doc, referralPlan, y);
+  }
+
+  // 1. PATIENT INFORMATION (Step 21)
   y = drawSectionTitle(doc, y, 'Patient Information');
   y = drawPatientInfoTable(doc, patientInfo, y);
   y = ensureSpace(doc, y, 4);
 
-  // 1. PATIENT VITALS
+  // 2. PATIENT VITALS
   y = drawSectionTitle(doc, y, 'Patient Vitals');
   y = drawVitalsTable(doc, vitals, y);
   y = ensureSpace(doc, y, 4);
 
-  // 2. ANOMALY FINDINGS
+  // 3. ANOMALY FINDINGS
   y = drawSectionTitle(doc, y, 'Anomaly Findings');
   y = drawNumberedList(doc, alerts, y);
   y = ensureSpace(doc, y, 4);
 
-  // 3. LAB FINDINGS  (only render if at least one row)
+  // 4. LAB FINDINGS  (only render if at least one row)
   y = drawLabFindingsTable(doc, labFindings, y);
   y = ensureSpace(doc, y, 4);
 
-  // 4. LAB ALERTS    (only render if at least one alert)
+  // 5. LAB ALERTS    (only render if at least one alert)
   y = drawSectionTitle(doc, y, 'Lab Alerts');
   y = drawNumberedList(doc, labAlerts, y);
 
   // =====================================================================
-  // PAGE 2 — sections 5..11
+  // PAGE 2 — sections 6..12
   // =====================================================================
   doc.addPage();
   drawHeader(doc, {
@@ -832,7 +981,7 @@ export function generatePhysicianPdf({
   });
   y = MARGIN_TOP + 6;
 
-  // 5. CLINICAL SUMMARY
+  // 6. CLINICAL SUMMARY
   y = drawSectionTitle(doc, y, 'Clinical Summary');
   y = drawWrappedText(
     doc,
@@ -843,22 +992,22 @@ export function generatePhysicianPdf({
   );
   y = ensureSpace(doc, y, 4);
 
-  // 6. POSSIBLE CONDITIONS
+  // 7. POSSIBLE CONDITIONS
   y = drawSectionTitle(doc, y, 'Possible Conditions');
   y = drawNumberedList(doc, verdict.possible_conditions, y);
   y = ensureSpace(doc, y, 4);
 
-  // 7. RECOMMENDED ACTIONS
+  // 8. RECOMMENDED ACTIONS
   y = drawSectionTitle(doc, y, 'Recommended Actions');
   y = drawNumberedList(doc, verdict.recommended_actions, y);
   y = ensureSpace(doc, y, 4);
 
-  // 8. FIRST AID RECOMMENDATIONS (English-only, no color accent)
+  // 9. FIRST AID RECOMMENDATIONS (English-only, no color accent)
   y = ensureSpace(doc, y, 8);
   y = drawFirstAidList(doc, firstAid, y);
   y = ensureSpace(doc, y, 4);
 
-  // 9. REFERRAL RECOMMENDATION
+  // 10. REFERRAL RECOMMENDATION
   y = drawSectionTitle(doc, y, 'Referral Recommendation');
   y = drawWrappedText(
     doc,
@@ -868,11 +1017,11 @@ export function generatePhysicianPdf({
   );
   y = ensureSpace(doc, y, 4);
 
-  // 10. VOICE TRANSCRIPT  (monospace bordered block)
+  // 11. VOICE TRANSCRIPT  (monospace bordered block)
   y = drawMonoBlock(doc, 'Voice Transcript / Symptoms Notes', voiceTranscript, y);
   y = ensureSpace(doc, y, 4);
 
-  // 11. OCR EXTRACTED TEXT (monospace bordered block)
+  // 12. OCR EXTRACTED TEXT (monospace bordered block)
   y = drawMonoBlock(doc, 'OCR Extracted Text', ocrText, y);
 
   // --- AI disclaimer rule (last-page footnote)

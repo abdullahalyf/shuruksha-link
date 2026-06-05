@@ -18,6 +18,7 @@ import {
   evaluateEmergencyRules,
   emergencyOverrideToVerdict,
 } from './utils/emergencyRules.js';
+import { getReferralRecommendation } from './utils/referralDirectory.js';
 import {
   loadHistory,
   saveCase,
@@ -107,6 +108,32 @@ export default function App() {
   const emergencyOverride = useMemo(
     () => evaluateEmergencyRules({ vitals, alerts, labFindings, labAlerts }),
     [vitals, alerts, labFindings, labAlerts]
+  );
+
+  // Step 23 — Smart Referral Directory & Care Escalation. Maps the
+  // AI verdict severity (or the offline emergency override) into a
+  // structured 5-tier referral plan (EMERGENCY / CRITICAL / HIGH /
+  // MEDIUM / LOW) with facility type, urgency, transportation, narrative
+  // recommendation, and a transfer checklist. The Emergency Override
+  // always wins precedence inside getReferralRecommendation, so this
+  // memo just feeds in the latest inputs. The result feeds the UI card,
+  // the PDF report, and the case-history record.
+  const referralPlan = useMemo(
+    () =>
+      getReferralRecommendation({
+        // Pull severity off the latest AI verdict when present, otherwise
+        // let the directory default to whatever the offline engine
+        // produced (Emergency Override short-circuits to EMERGENCY tier).
+        severity:
+          triageState.status === 'success' && triageState.verdict
+            ? triageState.verdict.severity
+            : null,
+        emergencyOverride,
+        patientInfo,
+        vitals,
+        labFindings,
+      }),
+    [triageState, emergencyOverride, patientInfo, vitals, labFindings]
   );
 
   // Deterministic first-aid recommendations derived from the same alert
@@ -306,6 +333,7 @@ export default function App() {
           redFlags,
           firstAid,
           emergencyOverride,
+          referralPlan,
           outputLanguage,
         });
         refreshHistory();
@@ -336,6 +364,7 @@ export default function App() {
               redFlags,
               firstAid,
               emergencyOverride,
+              referralPlan,
               outputLanguage,
             });
             refreshHistory();
@@ -553,6 +582,7 @@ export default function App() {
                   outputLanguage={outputLanguage}
                   patientInfo={patientInfo}
                   emergencyOverride={emergencyOverride}
+                  referralPlan={referralPlan}
                 />
               </div>
 

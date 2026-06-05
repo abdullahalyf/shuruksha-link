@@ -12,6 +12,7 @@ import { useState } from 'react';
 import LabFindings from './LabFindings.jsx';
 import FirstAidPanel from './FirstAidPanel.jsx';
 import EmergencyOverrideCard from './EmergencyOverrideCard.jsx';
+import ReferralCard from './ReferralCard.jsx';
 
 const SEVERITY_META = {
   LOW: {
@@ -190,8 +191,7 @@ function DownloadPhysicianPdf({
   labAlerts,
   firstAid = null,
   patientInfo = {},
-  emergencyOverride = null,
-  outputLanguage = 'en',
+  emergencyOverride = null,  referralPlan = null,  outputLanguage = 'en',
 }) {
   const [busy, setBusy] = useState(false);
   const [filename, setFilename] = useState(null);
@@ -215,6 +215,7 @@ function DownloadPhysicianPdf({
         firstAid,
         patientInfo,
         emergencyOverride,
+        referralPlan,
         outputLanguage,
       });
       setFilename(name);
@@ -294,6 +295,7 @@ export default function TriageResult({
   firstAid = null,
   patientInfo = {},
   emergencyOverride = null,
+  referralPlan = null,
   outputLanguage = 'en',
 }) {
   // Step 21 — compact professional display above the severity banner.
@@ -356,6 +358,13 @@ export default function TriageResult({
           <EmergencyOverrideCard override={emergencyOverride} />
         )}
 
+        {/* Step 23 — Smart Referral Directory card. Sits below the override
+            (if any) and the severity banner, and above the lab findings and
+            first-aid panels. Always rendered when a plan is supplied so
+            the CHW has a structured facility / urgency / transport view
+            independent of the free-text AI referral line. */}
+        {referralPlan && <ReferralCard plan={referralPlan} />}
+
         {/* Severity banner */}
         <div
           className={
@@ -379,6 +388,7 @@ export default function TriageResult({
                 firstAid={firstAid}
                 patientInfo={patientInfo}
                 emergencyOverride={emergencyOverride}
+                referralPlan={referralPlan}
                 outputLanguage={outputLanguage}
               />
             </div>

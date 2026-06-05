@@ -77,6 +77,7 @@ export function loadHistory() {
  * @param {string} [input.outputLanguage] - 'en' | 'bn' snapshot
  * @param {object} [input.patientInfo]    - { name, age, gender, phone, address } patient demographics snapshot (Step 21)
  * @param {object} [input.emergencyOverride] - { triggered, severity, reasons, firstAid, referral } from the offline emergency rules engine (Step 22). Null when no critical trigger fires.
+ * @param {object} [input.referralPlan] - { level, facilityType, urgency, transportation, recommendation, checklist } from the Smart Referral Directory (Step 23). Null until a triage request has produced a verdict.
  * @returns {object|null} The saved case (with id + timestamp), or null on failure.
  */
 export function saveCase(input) {
@@ -119,6 +120,11 @@ export function saveCase(input) {
     // Used by the PDF generator to render the red callout block on
     // page 1 when this case is reopened and re-exported.
     emergencyOverride: sanitize(input.emergencyOverride) || null,
+    // Step 23 — Smart Referral Directory snapshot. { level, facilityType,
+    // urgency, transportation, recommendation, checklist }. Persisted so
+    // the reopened case preview, the PDF re-export, and the audit trail
+    // all see the exact same referral plan the CHW acted on.
+    referralPlan: sanitize(input.referralPlan) || null,
   };
 
   const current = readAll();
