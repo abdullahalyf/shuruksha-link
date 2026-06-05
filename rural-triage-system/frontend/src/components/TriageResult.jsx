@@ -187,6 +187,8 @@ function DownloadPhysicianPdf({
   ocrText,
   labFindings,
   labAlerts,
+  firstAid = null,
+  outputLanguage = 'en',
 }) {
   const [busy, setBusy] = useState(false);
   const [filename, setFilename] = useState(null);
@@ -311,9 +313,22 @@ export default function TriageResult({
         >
           <div className="flex items-center justify-between gap-3 flex-wrap">
             <SeverityBadge severity={v.severity} />
-            <span className={'text-xs font-semibold ' + conf.cls}>
-              {conf.label}
-            </span>
+            <div className="flex items-center gap-3 flex-wrap">
+              <span className={'text-xs font-semibold ' + conf.cls}>
+                {conf.label}
+              </span>
+              <DownloadPhysicianPdf
+                verdict={v}
+                vitals={vitals}
+                alerts={alerts}
+                voiceText={voiceText}
+                ocrText={ocrText}
+                labFindings={labFindings}
+                labAlerts={labAlerts}
+                firstAid={firstAid}
+                outputLanguage={outputLanguage}
+              />
+            </div>
           </div>
           <p className="mt-3 text-sm leading-relaxed text-white/95">
             {v.summary || 'No summary provided.'}
