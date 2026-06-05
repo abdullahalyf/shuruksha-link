@@ -15,6 +15,10 @@ import { healthUrl, triageUrl } from './utils/apiBase.js';
 import { evaluateRedFlags } from './utils/redFlags.js';
 import { generateFirstAid } from './utils/firstAidRules.js';
 import {
+  evaluateEmergencyRules,
+  emergencyOverrideToVerdict,
+} from './utils/emergencyRules.js';
+import {
   loadHistory,
   saveCase,
   deleteCase as removeCaseFromHistory,
@@ -95,6 +99,16 @@ export default function App() {
     [vitals, voiceText, ocrText]
   );
 
+  // Step 22 — Offline Emergency Rules Engine. Independent from redFlags
+  // and from the LLM. Re-evaluated on every input change so the moment
+  // the CHW types a critical vital, the override banner is ready before
+  // the request even goes out. The verdict is also persisted to case
+  // history and rendered at the top of the PDF when triggered.
+  const emergencyOverride = useMemo(
+    () => evaluateEmergencyRules({ vitals, alerts, labFindings, labAlerts }),
+    [vitals, alerts, labFindings, labAlerts]
+  );
+
   // Deterministic first-aid recommendations derived from the same alert
   // signals (vitals + lab patterns) the safety floor uses. Re-runs whenever
   // any input changes, and is independent of the LLM verdict so it always
@@ -124,6 +138,10 @@ export default function App() {
     // and Gemini request all line up with the historical case.
     setPatientInfo(caseRecord.patientInfo || EMPTY_PATIENT_INFO);
     setTriageState({ status: 'success', verdict: caseRecord });
+    // Step 22: legacy cases (pre-Step 22) will not have emergencyOverride
+    // persisted. That's fine — the useMemo above re-derives the override
+    // from the just-restored vitals/labFindings/labAlerts in state, so
+    // the banner appears on the very next render with the correct value.
     // Restore the language the case was captured in so the first-aid panel
     // and any future re-render of the verdict both stay in the same script.
     if (caseRecord.outputLanguage) {
@@ -287,6 +305,7 @@ export default function App() {
           labAlerts,
           redFlags,
           firstAid,
+          emergencyOverride,
           outputLanguage,
         });
         refreshHistory();
@@ -295,6 +314,40 @@ export default function App() {
       }
     } catch (err) {
       console.error('[triage] request failed:', err);
+      // Step 22: Never show a blank panel. If the offline emergency
+      // engine fired, surface that as a CRITICAL verdict so the CHW
+      // gets an actionable recommendation even when the LLM is down.
+      if (emergencyOverride && emergencyOverride.triggered) {
+        const offlineVerdict = emergencyOverrideToVerdict(emergencyOverride);
+        if (offlineVerdict) {
+          setTriageState({ status: 'success', verdict: offlineVerdict });
+          // Best-effort persist so the offline-only verdict is in the
+          // audit trail (PDF + case history) just like a normal case.
+          try {
+            saveCase({
+              verdict: offlineVerdict,
+              patientInfo,
+              vitals,
+              alerts,
+              voiceText,
+              ocrText,
+              labFindings,
+              labAlerts,
+              redFlags,
+              firstAid,
+              emergencyOverride,
+              outputLanguage,
+            });
+            refreshHistory();
+          } catch (persistErr) {
+            console.warn(
+              '[case-history] could not persist offline case:',
+              persistErr
+            );
+          }
+          return;
+        }
+      }
       setTriageState({
         status: 'error',
         error:
@@ -499,6 +552,7 @@ export default function App() {
                   firstAid={firstAid}
                   outputLanguage={outputLanguage}
                   patientInfo={patientInfo}
+                  emergencyOverride={emergencyOverride}
                 />
               </div>
 

@@ -76,6 +76,7 @@ export function loadHistory() {
  * @param {object} [input.firstAid]       - Bilingual first-aid snapshot
  * @param {string} [input.outputLanguage] - 'en' | 'bn' snapshot
  * @param {object} [input.patientInfo]    - { name, age, gender, phone, address } patient demographics snapshot (Step 21)
+ * @param {object} [input.emergencyOverride] - { triggered, severity, reasons, firstAid, referral } from the offline emergency rules engine (Step 22). Null when no critical trigger fires.
  * @returns {object|null} The saved case (with id + timestamp), or null on failure.
  */
 export function saveCase(input) {
@@ -113,6 +114,11 @@ export function saveCase(input) {
     // Step 21 — patient demographics captured at intake. Stored on the
     // case so reopen, PDF export, and audit logs all see the same person.
     patientInfo: sanitize(input.patientInfo) || {},
+    // Step 22 — offline emergency rules result. Only non-null when the
+    // engine fired (e.g. SpO2<90, HR>140, T>40, Glucose>400, etc.).
+    // Used by the PDF generator to render the red callout block on
+    // page 1 when this case is reopened and re-exported.
+    emergencyOverride: sanitize(input.emergencyOverride) || null,
   };
 
   const current = readAll();

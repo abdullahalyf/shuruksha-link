@@ -13,7 +13,8 @@
 //     Thin divider line underneath.
 //
 //   Page 1
-//     0. PATIENT INFORMATION     (Name | Age | Gender | Phone | Address — black/gray table)
+//     -1. EMERGENCY OVERRIDE     (red callout — only when offline engine triggered; Step 22)
+//      0. PATIENT INFORMATION     (Name | Age | Gender | Phone | Address — black/gray table)
 //     1. PATIENT VITALS          (Parameter | Value | Unit | Status, pills)
 //     2. ANOMALY FINDINGS        (numbered list)
 //     3. LAB FINDINGS            (Parameter | Result | Unit | Status, pills)
@@ -377,6 +378,110 @@ function drawSeverityStrip(doc, severity, confidence) {
   return y + stripH + 4;
 }
 
+// --- Step 22: EMERGENCY OVERRIDE callout (red box, top of page 1) --------
+// Drawn between the severity strip and Section 0 (Patient Information)
+// ONLY when the offline engine fired. Uses the rose-800 emergency color
+// for a thick left rule + title bar, then renders the triggered reasons
+// and the first-aid list. The referral is a separate line at the bottom.
+// Designed to be the first thing a clinician sees on the report.
+function drawEmergencyOverrideBlock(doc, override, y) {
+  if (!override || !override.triggered) return y;
+  const reasons = Array.isArray(override.reasons) ? override.reasons : [];
+  const firstAid = Array.isArray(override.firstAid) ? override.firstAid : [];
+  const referral = String(override.referral || '').trim();
+
+  // Rough height: title bar (8) + 4.6/reason + 6/header + 4.6/item + referral + padding
+  const innerX = MARGIN_X + 4;
+  const innerW = CONTENT_W - 8;
+  const titleH = 8;
+  const reasonH = Math.max(reasons.length, 1) * 4.6;
+  const faHeaderH = 6;
+  const faItemH = Math.max(firstAid.length, 1) * 4.6;
+  const refH = referral ? 8 : 0;
+  const padTop = 4;
+  const padBottom = 4;
+  const totalH = padTop + titleH + reasonH + faHeaderH + faItemH + refH + padBottom;
+
+  // Background callout (light rose wash)
+  setFill(doc, [255, 241, 242]); // rose-50
+  setDraw(doc, COLOR.critical);   // rose-800
+  doc.setLineWidth(0.8);
+  doc.rect(MARGIN_X, y, CONTENT_W, totalH, 'FD');
+
+  // Title bar (solid rose-800 strip)
+  setFill(doc, COLOR.critical);
+  doc.rect(MARGIN_X, y, CONTENT_W, titleH, 'F');
+
+  setText(doc, [255, 255, 255]);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(10.5);
+  doc.text('EMERGENCY OVERRIDE', innerX, y + 5.5);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8.5);
+  doc.text('CRITICAL — Life-threatening findings', MARGIN_X + CONTENT_W - 2, y + 5.5, { align: 'right' });
+
+  // Reasons
+  let cursor = y + titleH + padTop;
+  setText(doc, COLOR.critical);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(8.5);
+  doc.text('TRIGGERED REASONS', innerX, cursor);
+  cursor += 5;
+
+  setText(doc, COLOR.ink);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(9.5);
+  if (reasons.length === 0) {
+    doc.text('Critical vitals detected.', innerX, cursor);
+    cursor += 4.6;
+  } else {
+    reasons.forEach((r) => {
+      const lines = doc.splitTextToSize(String(r), innerW - 6);
+      doc.text('•', innerX, cursor);
+      doc.text(lines, innerX + 4, cursor);
+      cursor += lines.length * 4.4;
+    });
+  }
+  cursor += 2;
+
+  // First aid
+  setText(doc, COLOR.critical);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(8.5);
+  doc.text('IMMEDIATE FIRST AID', innerX, cursor);
+  cursor += 5;
+
+  setText(doc, COLOR.ink);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(9.5);
+  if (firstAid.length === 0) {
+    doc.text('Stabilize and refer immediately.', innerX, cursor);
+    cursor += 4.6;
+  } else {
+    firstAid.forEach((a) => {
+      const lines = doc.splitTextToSize(String(a), innerW - 6);
+      doc.text('•', innerX, cursor);
+      doc.text(lines, innerX + 4, cursor);
+      cursor += lines.length * 4.4;
+    });
+  }
+  cursor += 2;
+
+  // Referral
+  if (referral) {
+    setFill(doc, COLOR.critical);
+    const refY = y + totalH - refH;
+    doc.rect(MARGIN_X, refY, CONTENT_W, refH, 'F');
+    setText(doc, [255, 255, 255]);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(9);
+    const refLines = doc.splitTextToSize(referral, CONTENT_W - 8);
+    doc.text(refLines, innerX, refY + 5.5);
+  }
+
+  return y + totalH + 4;
+}
+
 // --- Section 0: PATIENT INFORMATION (table) ------------------------------
 // Step 21 — demographics captured at intake. Pure black/gray print, no
 // Bengali, no color. Two-column layout: bold slate-600 label, regular
@@ -645,6 +750,11 @@ function drawMonoBlock(doc, label, text, y) {
  * @param {object} [params.patientInfo]    - { name, age, gender, phone, address }
  *                                           Step 21 — rendered as Section 0 on page 1.
  *                                           English-only, black/gray print, no Bengali.
+ * @param {object} [params.emergencyOverride] - Offline engine result (Step 22).
+ *                                           When { triggered: true, ... } is passed,
+ *                                           a red callout is rendered at the very
+ *                                           top of page 1 (above the severity strip
+ *                                           and Section 0). Null/undefined = hidden.
  * @param {string} [params.outputLanguage] - Accepted for API compatibility.
  *                                           The PDF is always English.
  * @returns {{ filename: string, pageCount: number }}
@@ -659,6 +769,7 @@ export function generatePhysicianPdf({
   labAlerts = [],
   firstAid = null,
   patientInfo = {},
+  emergencyOverride = null,
   outputLanguage = 'en', // accepted but ignored — PDF is English-only
 } = {}) {
   if (!verdict) {
@@ -678,6 +789,14 @@ export function generatePhysicianPdf({
     generatedAt,
   });
   let y = drawSeverityStrip(doc, verdict.severity, verdict.confidence);
+
+  // -1. EMERGENCY OVERRIDE (Step 22) — sits at the absolute top of page 1
+  // content area, above Patient Information. The severity strip is still
+  // drawn first so the PDF's severity line matches the AI verdict, then
+  // the override callout dominates visually with its red callout box.
+  if (emergencyOverride && emergencyOverride.triggered) {
+    y = drawEmergencyOverrideBlock(doc, emergencyOverride, y);
+  }
 
   // 0. PATIENT INFORMATION (Step 21)
   y = drawSectionTitle(doc, y, 'Patient Information');

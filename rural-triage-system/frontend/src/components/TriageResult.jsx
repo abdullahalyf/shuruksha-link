@@ -11,6 +11,7 @@
 import { useState } from 'react';
 import LabFindings from './LabFindings.jsx';
 import FirstAidPanel from './FirstAidPanel.jsx';
+import EmergencyOverrideCard from './EmergencyOverrideCard.jsx';
 
 const SEVERITY_META = {
   LOW: {
@@ -189,6 +190,7 @@ function DownloadPhysicianPdf({
   labAlerts,
   firstAid = null,
   patientInfo = {},
+  emergencyOverride = null,
   outputLanguage = 'en',
 }) {
   const [busy, setBusy] = useState(false);
@@ -212,6 +214,7 @@ function DownloadPhysicianPdf({
         labAlerts,
         firstAid,
         patientInfo,
+        emergencyOverride,
         outputLanguage,
       });
       setFilename(name);
@@ -290,6 +293,7 @@ export default function TriageResult({
   labAlerts = [],
   firstAid = null,
   patientInfo = {},
+  emergencyOverride = null,
   outputLanguage = 'en',
 }) {
   // Step 21 — compact professional display above the severity banner.
@@ -345,6 +349,13 @@ export default function TriageResult({
           </div>
         )}
 
+        {/* Step 22 — Offline emergency rules banner. Sits above the AI
+            severity verdict so the CHW cannot miss it. When the offline
+            engine fires, the AI verdict (if any) is advisory only. */}
+        {emergencyOverride && emergencyOverride.triggered && (
+          <EmergencyOverrideCard override={emergencyOverride} />
+        )}
+
         {/* Severity banner */}
         <div
           className={
@@ -367,6 +378,7 @@ export default function TriageResult({
                 labAlerts={labAlerts}
                 firstAid={firstAid}
                 patientInfo={patientInfo}
+                emergencyOverride={emergencyOverride}
                 outputLanguage={outputLanguage}
               />
             </div>
