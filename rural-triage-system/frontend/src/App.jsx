@@ -9,6 +9,7 @@ import TriageResult from './components/TriageResult.jsx';
 import CaseHistory from './components/CaseHistory.jsx';
 import { checkVitals } from './utils/checkVitals.js';
 import { parseMedicalReport } from './utils/parseMedicalReport.js';
+import { rootHealthUrl, triageUrl } from './utils/apiBase.js';
 import {
   loadHistory,
   saveCase,
@@ -90,8 +91,10 @@ export default function App() {
   };
 
   useEffect(() => {
-    // Smoke test: confirm the backend is reachable
-    fetch('http://localhost:5000/')
+    // Smoke test: confirm the backend is reachable. The URL comes from
+    // src/utils/apiBase.js (VITE_API_BASE_URL) so it works the same in
+    // dev (Vite proxy), staging, and production.
+    fetch(rootHealthUrl())
       .then((res) => res.json())
       .then((data) => setApiStatus(data.message || 'connected'))
       .catch(() => setApiStatus('unreachable (is the backend running on :5000?)'));
@@ -100,7 +103,7 @@ export default function App() {
   const handleProcessTriage = async () => {
     setTriageState({ status: 'loading' });
     try {
-      const res = await fetch('http://localhost:5000/api/triage', {
+      const res = await fetch(triageUrl(), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

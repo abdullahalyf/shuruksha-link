@@ -1,0 +1,28 @@
+# Render Blueprint - Shuruksha Link backend
+# This file lets you create the backend service straight from the Render
+# dashboard (Infrastructure -> Blueprint -> New Blueprint Instance) and
+# keeps the env-var list checked into source control.
+#
+# Bind GEMINI_API_KEY as a "Secret" type so it's stored encrypted and
+# masked in the Render UI.
+services:
+  - type: web
+    name: shuruksha-link-api
+    runtime: node
+    rootDir: backend
+    plan: starter
+    region: oregon
+    branch: main
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: GEMINI_API_KEY
+        sync: false
+        # When importing, Render will prompt for the actual value. Do NOT
+        # paste the key into this file.
+      - key: PORT
+        value: "5000"
