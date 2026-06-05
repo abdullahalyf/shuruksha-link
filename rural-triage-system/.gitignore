@@ -45,3 +45,8 @@ Thumbs.db
 # Uploads (optional)
 backend/uploads/*
 !backend/uploads/.gitkeep
+
+NEXT_STEPS.md
+PROJECT_CONTEXT.md
+ARCHITECTURE.md
+app_logo.png
