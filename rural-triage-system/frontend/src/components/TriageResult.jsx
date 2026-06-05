@@ -9,6 +9,7 @@
 //   vitals, alerts, voiceText, ocrText.
 
 import { useState } from 'react';
+import LabFindings from './LabFindings.jsx';
 
 const SEVERITY_META = {
   LOW: {
@@ -183,6 +184,8 @@ function DownloadPhysicianPdf({
   alerts,
   voiceText,
   ocrText,
+  labFindings,
+  labAlerts,
 }) {
   const [busy, setBusy] = useState(false);
   const [filename, setFilename] = useState(null);
@@ -201,6 +204,8 @@ function DownloadPhysicianPdf({
         alerts,
         voiceTranscript: voiceText,
         ocrText,
+        labFindings,
+        labAlerts,
       });
       setFilename(name);
     } catch (e) {
@@ -274,6 +279,8 @@ export default function TriageResult({
   alerts = [],
   voiceText = '',
   ocrText = '',
+  labFindings = {},
+  labAlerts = [],
 }) {
   const status = state?.status || 'idle';
 
@@ -308,12 +315,18 @@ export default function TriageResult({
           </p>
         </div>
 
+        {/* Lab findings extracted from the document scan — shown to the
+            CHW before the AI verdict so the clinical context is clear. */}
+        <LabFindings labFindings={labFindings} labAlerts={labAlerts} />
+
         <DownloadPhysicianPdf
           verdict={v}
           vitals={vitals}
           alerts={alerts}
           voiceText={voiceText}
           ocrText={ocrText}
+          labFindings={labFindings}
+          labAlerts={labAlerts}
         />
 
         <SectionCard

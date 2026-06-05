@@ -6,7 +6,15 @@
 import { useEffect, useMemo, useState } from 'react';
 import VitalsForm from './components/VitalsForm.jsx';
 import TriageResult from './components/TriageResult.jsx';
+import CaseHistory from './components/CaseHistory.jsx';
 import { checkVitals } from './utils/checkVitals.js';
+import { parseMedicalReport } from './utils/parseMedicalReport.js';
+import {
+  loadHistory,
+  saveCase,
+  deleteCase as removeCaseFromHistory,
+  clearAll as clearAllHistory,
+} from './utils/caseHistory.js';
 
 const EMPTY_VITALS = {
   bp: '',
@@ -40,6 +48,47 @@ export default function App() {
   // Recompute alerts in the parent so they can be sent with the triage request.
   const alerts = useMemo(() => checkVitals(vitals), [vitals]);
 
+  // Structured medical extraction from the OCR text. Runs on every OCR
+  // change so the LAB FINDINGS card and the Gemini prompt are always in
+  // sync with whatever was just scanned.
+  const { labs: labFindings, labAlerts } = useMemo(
+    () => parseMedicalReport(ocrText),
+    [ocrText]
+  );
+
+  // Local case history (LocalStorage-backed). Re-loaded on mount; refreshed
+  // after every save / delete / clear so the dashboard always reflects the
+  // current store contents.
+  const [cases, setCases] = useState(() => loadHistory());
+  const refreshHistory = () => setCases(loadHistory());
+
+  // Reopen a saved case: re-populate the intake form, re-derive lab findings
+  // (the useMemo above re-runs because ocrText changes), and show the saved
+  // verdict in the TriageResult panel. The PDF export still works because
+  // all source data is back in App state.
+  const handleReopenCase = (caseRecord) => {
+    if (!caseRecord) return;
+    setVitals(caseRecord.vitals || EMPTY_VITALS);
+    setVoiceText(caseRecord.voiceText || '');
+    setOcrText(caseRecord.ocrText || '');
+    setTriageState({ status: 'success', verdict: caseRecord });
+    // Scroll the user up to the AI Assistant panel so they can see the
+    // re-rendered verdict immediately.
+    if (typeof window !== 'undefined') {
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+  };
+
+  const handleDeleteCase = (id) => {
+    removeCaseFromHistory(id);
+    refreshHistory();
+  };
+
+  const handleClearAllCases = () => {
+    clearAllHistory();
+    refreshHistory();
+  };
+
   useEffect(() => {
     // Smoke test: confirm the backend is reachable
     fetch('http://localhost:5000/')
@@ -59,6 +108,8 @@ export default function App() {
           alerts,
           voiceTranscript: voiceText,
           ocrText,
+          labFindings,
+          labAlerts,
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -77,6 +128,25 @@ export default function App() {
         return;
       }
       setTriageState({ status: 'success', verdict: data.verdict });
+
+      // Persist this triage case to LocalStorage. The save layer is
+      // best-effort: any failure (quota, serialization) is logged but
+      // never propagates to the user — the verdict itself is already
+      // rendered on screen.
+      try {
+        saveCase({
+          verdict: data.verdict,
+          vitals,
+          alerts,
+          voiceText,
+          ocrText,
+          labFindings,
+          labAlerts,
+        });
+        refreshHistory();
+      } catch (persistErr) {
+        console.warn('[case-history] could not persist case:', persistErr);
+      }
     } catch (err) {
       console.error('[triage] request failed:', err);
       setTriageState({
@@ -239,6 +309,8 @@ export default function App() {
                   alerts={alerts}
                   voiceText={voiceText}
                   ocrText={ocrText}
+                  labFindings={labFindings}
+                  labAlerts={labAlerts}
                 />
               </div>
 
@@ -247,6 +319,19 @@ export default function App() {
               </div>
             </section>
           </aside>
+        </div>
+
+        {/* Case history — LocalStorage-backed audit trail. Lists every
+            successful triage from this browser in reverse chronological
+            order, with click-to-reopen, per-card delete, and a
+            confirm-before-clear-all action. */}
+        <div className="mt-6">
+          <CaseHistory
+            cases={cases}
+            onReopen={handleReopenCase}
+            onDelete={handleDeleteCase}
+            onClearAll={handleClearAllCases}
+          />
         </div>
 
         <footer className="mt-8 text-center text-xs text-slate-500">

@@ -177,31 +177,79 @@ const ALERT_SEVERITY_MAP = [
   { match: /glucose|blood sugar/i, min: 'MEDIUM' },
 ];
 
+// CRITICAL lab alerts force CRITICAL severity (e.g. critical thrombocytopenia
+// in suspected dengue, DKA-range glucose, AKI, severe anemia).
+const CRITICAL_LAB_PATTERNS = [
+  /critical\s+thrombocytopenia|critical\s+platelet|platelet.*<\s*50|<\s*50,?000.*platelet|platelet.*critically/i,
+  /critical\s+anemia|hemoglobin.*<\s*7|hb\s*<\s*7|severe\s+anemia/i,
+  /critical\s+hyperglycemia|dk[a]|glucose.*>\s*400|>\s*400.*glucose/i,
+  /critical\s+hypoglycemia|glucose.*<\s*50|<\s*50.*glucose/i,
+  /acute\s+kidney\s+injury|critical\s+creatinine|creatinine.*>\s*5|>\s*5.*creatinine/i,
+  /critical\s+leukocytosis|septic|wbc.*>\s*30,?000|>\s*30,?000.*wbc/i,
+];
+
+// HIGH lab alerts force at least HIGH severity.
+const HIGH_LAB_PATTERNS = [
+  /thrombocytopenia|low\s+platelet|platelet.*<\s*150/i,
+  /anemia|low\s+hemoglobin|hb\s*<\s*10/i,
+  /hyperglycemia|high\s+glucose|glucose.*>\s*200|>\s*200.*glucose/i,
+  /leukocytosis|high\s+wbc|wbc.*>\s*15,?000|>\s*15,?000.*wbc/i,
+  /leukopenia|low\s+wbc|wbc.*<\s*4,?000|<\s*4,?000.*wbc/i,
+  /high\s+creatinine|elevated\s+creatinine|creatinine.*>\s*1\.5/i,
+  /high\s+urea|elevated\s+urea|urea.*>\s*50/i,
+  /high\s+esr|elevated\s+esr|esr.*>\s*30/i,
+];
+
 const SEVERITY_RANK = { LOW: 0, MEDIUM: 1, HIGH: 2, CRITICAL: 3 };
 
-function applySafetyFloor(verdict, alerts) {
-  if (!Array.isArray(alerts) || alerts.length === 0) return verdict;
+function applySafetyFloor(verdict, alerts, labAlerts) {
   let floor = 'LOW';
-  for (const a of alerts) {
-    for (const rule of ALERT_SEVERITY_MAP) {
-      if (rule.match.test(a) && SEVERITY_RANK[rule.min] > SEVERITY_RANK[floor]) {
-        floor = rule.min;
+  let overrideReason = '';
+
+  // Vitals-derived alerts
+  if (Array.isArray(alerts) && alerts.length > 0) {
+    for (const a of alerts) {
+      for (const rule of ALERT_SEVERITY_MAP) {
+        if (rule.match.test(a) && SEVERITY_RANK[rule.min] > SEVERITY_RANK[floor]) {
+          floor = rule.min;
+        }
+      }
+    }
+    // SpO2 < 90 in alerts (text contains "oxygen" with very low) → CRITICAL floor.
+    const criticalPattern = /(oxygen|spo2)[^\n]{0,40}(<\s*90|below\s*90|critical)/i;
+    if (alerts.some((a) => criticalPattern.test(a))) {
+      floor = 'CRITICAL';
+      overrideReason = 'vitals SpO2 < 90';
+    }
+  }
+
+  // Lab-derived alerts override vitals floor upwards.
+  if (Array.isArray(labAlerts) && labAlerts.length > 0) {
+    const text = labAlerts.join('\n');
+    if (CRITICAL_LAB_PATTERNS.some((p) => p.test(text))) {
+      floor = 'CRITICAL';
+      overrideReason = overrideReason || 'critical lab alert';
+    } else if (HIGH_LAB_PATTERNS.some((p) => p.test(text))) {
+      if (SEVERITY_RANK['HIGH'] > SEVERITY_RANK[floor]) {
+        floor = 'HIGH';
+        overrideReason = overrideReason || 'abnormal lab alert';
       }
     }
   }
-  // SpO2 < 90 in alerts (text contains "oxygen" with very low) → CRITICAL floor.
-  const criticalPattern = /(oxygen|spo2)[^\n]{0,40}(<\s*90|below\s*90|critical)/i;
-  if (alerts.some((a) => criticalPattern.test(a))) floor = 'CRITICAL';
 
   if (SEVERITY_RANK[floor] > SEVERITY_RANK[verdict.severity]) {
+    const reasonSuffix = overrideReason
+      ? ' (reason: ' + overrideReason + ')'
+      : '';
     return {
       ...verdict,
       severity: floor,
       summary:
         verdict.summary +
-        ' [Safety override: local vitals anomaly detector flagged a ' +
+        ' [Safety override: local anomaly detector raised severity to ' +
         floor +
-        '-risk pattern.]',
+        reasonSuffix +
+        '.]',
     };
   }
   return verdict;
@@ -214,9 +262,21 @@ function buildPrompt(payload) {
     alerts = [],
     voiceTranscript = '',
     ocrText = '',
+    labFindings = {},
+    labAlerts = [],
   } = payload || {};
 
   const v = (k) => (vitals[k] === '' || vitals[k] == null ? '—' : String(vitals[k]));
+
+  // Render the structured lab findings into a compact text block. Only
+  // include keys that have a numeric value; we leave the status tag in
+  // parens so the LLM doesn't have to guess.
+  const labLines = Object.keys(labFindings || {})
+    .filter((k) => !k.endsWith('_status') && labFindings[k] != null)
+    .map((k) => {
+      const status = labFindings[`${k}_status`] || 'UNKNOWN';
+      return `  - ${k}: ${labFindings[k]} (${status})`;
+    });
 
   return [
     'You are a clinical decision-support assistant for Community Health Workers (CHWs)',
@@ -231,13 +291,19 @@ function buildPrompt(payload) {
     `- SpO2: ${v('oxygen')} %`,
     `- Blood glucose: ${v('glucose')} mg/dL`,
     '',
-    'Local anomaly detector alerts:',
+    'Local anomaly detector alerts (vitals-derived):',
     alerts.length ? alerts.map((a, i) => `  ${i + 1}. ${a}`).join('\n') : '  (none)',
+    '',
+    'Lab findings extracted from uploaded lab report (rule-based extraction):',
+    labLines.length ? labLines.join('\n') : '  (no lab values extracted)',
+    '',
+    'Lab alerts (rule-based medical flags, e.g. thrombocytopenia, anemia, etc.):',
+    labAlerts.length ? labAlerts.map((a, i) => `  ${i + 1}. ${a}`).join('\n') : '  (none)',
     '',
     'CHW voice transcript (symptoms as spoken by the patient / family):',
     voiceTranscript ? voiceTranscript : '(none provided)',
     '',
-    'OCR text from uploaded prescription / lab report:',
+    'OCR text from uploaded prescription / lab report (raw, unparsed):',
     ocrText ? ocrText : '(none provided)',
     '',
     'Produce a triage verdict in STRICT JSON. Choose severity as follows:',
@@ -245,6 +311,20 @@ function buildPrompt(payload) {
     '  MEDIUM   → needs clinician review within 24-48 h',
     '  HIGH     → needs same-day facility evaluation',
     '  CRITICAL → life-threatening, refer to hospital immediately',
+    '',
+    'IMPORTANT — when lab findings or lab alerts are present, you MUST explicitly',
+    'consider them when generating severity, possible_conditions,',
+    'recommended_actions, and referral. Examples of how to reason:',
+    '  - Platelet < 50,000 / thrombocytopenia alert  -> think dengue,',
+    '    refer for platelet transfusion if symptomatic bleeding.',
+    '  - Hemoglobin < 7 / critical anemia alert     -> same-day transfusion,',
+    '    add severe anemia to possible_conditions.',
+    '  - Creatinine > 3 / AKI alert                  -> refer to facility,',
+    '    consider dehydration / obstruction.',
+    '  - WBC > 20,000 / leukocytosis alert           -> possible sepsis /',
+    '    severe infection, upgrade severity if vitals support it.',
+    '  - Glucose > 300 / hyperglycemia alert         -> possible DKA, urgent',
+    '    referral even if vitals look otherwise stable.',
     '',
     'If a vitals reading is clearly out of safe range (e.g. SpO2 < 90, severe',
     'tachycardia, very high fever in a child, glucose < 60 or > 300), prefer the',
@@ -264,14 +344,18 @@ router.post('/', async (req, res) => {
     });
   }
 
-  const { vitals, alerts, voiceTranscript, ocrText } = req.body || {};
+  const { vitals, alerts, voiceTranscript, ocrText, labFindings, labAlerts } = req.body || {};
 
-  // Basic shape check — don't waste a Gemini call on a totally empty payload.
+  // Basic shape check â€” don't waste a Gemini call on a totally empty payload.
+  const hasLabs =
+    (labFindings && Object.values(labFindings).some((x) => x !== '' && x != null)) ||
+    (Array.isArray(labAlerts) && labAlerts.length > 0);
   const hasAny =
     (vitals && Object.values(vitals).some((x) => x !== '' && x != null)) ||
     (Array.isArray(alerts) && alerts.length > 0) ||
     (voiceTranscript && voiceTranscript.trim().length > 0) ||
-    (ocrText && ocrText.trim().length > 0);
+    (ocrText && ocrText.trim().length > 0) ||
+    hasLabs;
 
   if (!hasAny) {
     return res.status(400).json({
@@ -282,7 +366,7 @@ router.post('/', async (req, res) => {
 
   try {
     const genAI = new GoogleGenerativeAI(apiKey);
-    const prompt = buildPrompt({ vitals, alerts, voiceTranscript, ocrText });
+    const prompt = buildPrompt({ vitals, alerts, voiceTranscript, ocrText, labFindings, labAlerts });
 
     let raw = '';
     let winningModel = null;
@@ -353,7 +437,7 @@ router.post('/', async (req, res) => {
       confidence: parsed.confidence || 'low',
     };
 
-    const safe = applySafetyFloor(verdict, alerts || []);
+    const safe = applySafetyFloor(verdict, alerts || [], labAlerts || []);
 
     console.log(`[triage] verdict served via ${winningModel} (severity=${safe.severity}).`);
     return res.json({ ok: true, verdict: safe, model: winningModel });

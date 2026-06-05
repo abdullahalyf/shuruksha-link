@@ -103,6 +103,23 @@ const VITAL_FIELDS = [
   },
 ];
 
+// --- Lab field metadata (must match parseMedicalReport.js) ---------------
+// The keys here match the keys the parser produces in `labFindings`. The
+// status is read directly from `labFindings[${key}_status]` so we don't
+// duplicate the threshold table in the PDF generator.
+const LAB_FIELDS = [
+  { key: 'hemoglobin',   label: 'Hemoglobin (Hb)',     unit: 'g/dL'    },
+  { key: 'wbc',          label: 'WBC / TLC',           unit: '/µL'     },
+  { key: 'platelet',     label: 'Platelet Count',      unit: '/µL'     },
+  { key: 'rbc',          label: 'RBC',                 unit: 'million/µL' },
+  { key: 'esr',          label: 'ESR',                 unit: 'mm/hr'   },
+  { key: 'neutrophils',  label: 'Neutrophils',         unit: '%'       },
+  { key: 'lymphocytes',  label: 'Lymphocytes',         unit: '%'       },
+  { key: 'glucose',      label: 'Blood Glucose',       unit: 'mg/dL'   },
+  { key: 'creatinine',   label: 'Serum Creatinine',    unit: 'mg/dL'   },
+  { key: 'urea',         label: 'Blood Urea / BUN',    unit: 'mg/dL'   },
+];
+
 // --- Low-level PDF helpers -----------------------------------------------
 function setFill(doc, [r, g, b]) {
   doc.setFillColor(r, g, b);
@@ -419,6 +436,100 @@ function drawAlerts(doc, alerts, y) {
   return cursor;
 }
 
+// --- Lab findings helpers ------------------------------------------------
+// Render a structured Parameter | Value | Unit | Status table for the
+// extracted lab values. Same visual style as the vitals table. Returns the
+// new y cursor; returns the input y unchanged if there are no findings.
+function drawLabFindingsTable(doc, labFindings, y) {
+  if (!labFindings || typeof labFindings !== 'object') return y;
+  // Build the row list up-front so we can early-out cleanly.
+  const rows = LAB_FIELDS
+    .map((f) => {
+      const raw = labFindings[f.key];
+      if (raw === '' || raw == null) return null;
+      return {
+        label: f.label,
+        value: String(raw),
+        unit: f.unit,
+        status: labFindings[`${f.key}_status`] || 'UNKNOWN',
+      };
+    })
+    .filter(Boolean);
+  if (rows.length === 0) return y;
+
+  y = drawSectionTitle(doc, y, 'Lab Findings');
+
+  // Reuse the same column layout as drawVitalsTable for visual consistency.
+  const colX = [MARGIN_X, MARGIN_X + 80, MARGIN_X + 110, MARGIN_X + CONTENT_W];
+  const rowH = 8;
+
+  setDraw(doc, COLOR.ink);
+  doc.setLineWidth(0.4);
+  doc.line(MARGIN_X, y, MARGIN_X + CONTENT_W, y);
+  y += 4.5;
+
+  setText(doc, COLOR.inkMuted);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(8.5);
+  doc.text('PARAMETER', colX[0] + 2, y);
+  doc.text('VALUE',     colX[1] + 2, y);
+  doc.text('UNIT',      colX[2] + 2, y);
+  doc.text('STATUS',    colX[3] - 2, y, { align: 'right' });
+  y += 2.5;
+
+  setDraw(doc, COLOR.rule);
+  doc.setLineWidth(0.2);
+  doc.line(MARGIN_X, y, MARGIN_X + CONTENT_W, y);
+  y += 4.5;
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(10);
+  rows.forEach((r) => {
+    setText(doc, COLOR.ink);
+    doc.setFont('helvetica', 'normal');
+    doc.text(r.label, colX[0] + 2, y);
+    doc.setFont('helvetica', 'bold');
+    doc.text(r.value, colX[1] + 2, y);
+    doc.setFont('helvetica', 'normal');
+    setText(doc, COLOR.inkMuted);
+    doc.text(r.unit, colX[2] + 2, y);
+
+    drawStatusPill(doc, r.status, colX[3] - 12, y + 1.2);
+    y += rowH;
+
+    setDraw(doc, COLOR.rule);
+    doc.setLineWidth(0.1);
+    doc.line(MARGIN_X, y - 1.5, MARGIN_X + CONTENT_W, y - 1.5);
+  });
+
+  setDraw(doc, COLOR.ink);
+  doc.setLineWidth(0.4);
+  doc.line(MARGIN_X, y - 1.5, MARGIN_X + CONTENT_W, y - 1.5);
+  return y + 2;
+}
+
+// Render the rule-based lab alerts as a numbered list, identical in style
+// to the vitals-derived Anomaly Findings section on page 1.
+function drawLabAlerts(doc, labAlerts, y) {
+  if (!Array.isArray(labAlerts) || labAlerts.length === 0) return y;
+  y = drawSectionTitle(doc, y, 'Lab Alerts');
+  let cursor = y;
+  setText(doc, COLOR.ink);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(10);
+  labAlerts.forEach((a, i) => {
+    const lines = doc.splitTextToSize(a, CONTENT_W - 10);
+    setText(doc, COLOR.inkMuted);
+    doc.setFont('helvetica', 'bold');
+    doc.text(`${i + 1}.`, MARGIN_X, cursor);
+    setText(doc, COLOR.ink);
+    doc.setFont('helvetica', 'normal');
+    doc.text(lines, MARGIN_X + 8, cursor);
+    cursor += lines.length * 4.6 + 1.2;
+  });
+  return cursor;
+}
+
 function drawMonoBlock(doc, label, text, y) {
   y = drawSectionTitle(doc, y, label);
   const safeText = text && text.trim().length > 0 ? text.trim() : 'Not provided.';
@@ -447,6 +558,8 @@ function drawMonoBlock(doc, label, text, y) {
  * @param {string[]} [params.alerts]       - Local anomaly detector messages
  * @param {string} [params.voiceTranscript] - Captured voice text
  * @param {string} [params.ocrText]        - OCR text from document scan
+ * @param {object} [params.labFindings]    - Parsed lab values { key: value, key_status: '...' }
+ * @param {string[]} [params.labAlerts]    - Rule-based lab alerts
  * @returns {{ filename: string, pageCount: number }}
  */
 export function generatePhysicianPdf({
@@ -455,6 +568,8 @@ export function generatePhysicianPdf({
   alerts = [],
   voiceTranscript = '',
   ocrText = '',
+  labFindings = {},
+  labAlerts = [],
 } = {}) {
   if (!verdict) {
     throw new Error('generatePhysicianPdf: verdict is required.');
@@ -480,6 +595,13 @@ export function generatePhysicianPdf({
   y = drawSectionTitle(doc, y, 'Patient Vitals');
   y = drawVitalsTable(doc, vitals, y);
   y = ensureSpace(doc, y, 2);
+
+  // Lab findings + lab alerts live on page 1, right after the vitals-
+  // derived anomaly findings. Same print style, same colored status pills.
+  y = ensureSpace(doc, y, 6);
+  y = drawLabFindingsTable(doc, labFindings, y);
+  y = ensureSpace(doc, y, 2);
+  y = drawLabAlerts(doc, labAlerts, y);
 
   y = drawAlerts(doc, alerts, y);
   drawPageChrome(doc, 1);
