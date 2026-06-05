@@ -10,6 +10,7 @@
 
 import { useState } from 'react';
 import LabFindings from './LabFindings.jsx';
+import FirstAidPanel from './FirstAidPanel.jsx';
 
 const SEVERITY_META = {
   LOW: {
@@ -206,6 +207,8 @@ function DownloadPhysicianPdf({
         ocrText,
         labFindings,
         labAlerts,
+        firstAid,
+        outputLanguage,
       });
       setFilename(name);
     } catch (e) {
@@ -281,6 +284,8 @@ export default function TriageResult({
   ocrText = '',
   labFindings = {},
   labAlerts = [],
+  firstAid = null,
+  outputLanguage = 'en',
 }) {
   const status = state?.status || 'idle';
 
@@ -319,15 +324,9 @@ export default function TriageResult({
             CHW before the AI verdict so the clinical context is clear. */}
         <LabFindings labFindings={labFindings} labAlerts={labAlerts} />
 
-        <DownloadPhysicianPdf
-          verdict={v}
-          vitals={vitals}
-          alerts={alerts}
-          voiceText={voiceText}
-          ocrText={ocrText}
-          labFindings={labFindings}
-          labAlerts={labAlerts}
-        />
+        {/* Deterministic first-aid panel — runs even when the LLM is
+            unavailable. Renders below the AI verdict. */}
+        <FirstAidPanel firstAid={firstAid} language={outputLanguage} />
 
         <SectionCard
           title="Possible conditions"

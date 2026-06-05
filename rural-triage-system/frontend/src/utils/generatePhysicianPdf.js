@@ -530,6 +530,61 @@ function drawLabAlerts(doc, labAlerts, y) {
   return cursor;
 }
 
+// --- First-aid helpers ---------------------------------------------------
+// Bilingual first-aid is rendered as a numbered list of green-tinted
+// checked recommendations. The picker function selects the language the
+// case was captured in; the `bn` fallback mirrors the on-screen component
+// so PDF and UI always agree on the script.
+function pickFirstAidText(item, language) {
+  if (!item) return '';
+  if (language === 'bn' || language === 'bangla') {
+    return item.bn || item.en || '';
+  }
+  return item.en || item.bn || '';
+}
+
+function drawFirstAid(doc, firstAid, language, y) {
+  // FirstAidPanel returns either a structured object
+  // { firstAidTitle: {en,bn}, firstAidItems: [{en,bn}, …] } or null.
+  // Render the section only if there is at least one item to show.
+  const items = Array.isArray(firstAid?.firstAidItems) ? firstAid.firstAidItems : [];
+  if (items.length === 0) return y;
+
+  // Section title picks the active language. Title text itself is shared
+  // between the UI and PDF — they are both kept in firstAidRules.js.
+  const titleObj = firstAid?.firstAidTitle;
+  const titleText = (titleObj && (titleObj[language] || titleObj.en)) || 'First Aid Recommendations';
+  y = drawSectionTitle(doc, y, `First Aid Recommendations — ${titleText}`);
+
+  let cursor = y;
+  items.forEach((it, i) => {
+    const text = pickFirstAidText(it, language);
+    if (!text) return;
+    // Green check glyph + bilingual line. Tiny tinted square reads more
+    // print-friendly than a Unicode checkmark in some PDF renderers.
+    const lines = doc.splitTextToSize(text, CONTENT_W - 14);
+    const blockH = lines.length * 4.6 + 1.2;
+
+    // Thin green left rule — the only green accent in the report, used
+    // to visually separate "self-care" from diagnostic content.
+    setDraw(doc, COLOR.low);
+    doc.setLineWidth(0.5);
+    doc.line(MARGIN_X, cursor - 3.2, MARGIN_X, cursor - 3.2 + blockH);
+
+    setText(doc, COLOR.low);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(11);
+    doc.text('\u2713', MARGIN_X + 2.5, cursor);
+
+    setText(doc, COLOR.ink);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(10);
+    doc.text(lines, MARGIN_X + 8, cursor);
+    cursor += blockH;
+  });
+  return cursor + 2;
+}
+
 function drawMonoBlock(doc, label, text, y) {
   y = drawSectionTitle(doc, y, label);
   const safeText = text && text.trim().length > 0 ? text.trim() : 'Not provided.';
@@ -560,6 +615,8 @@ function drawMonoBlock(doc, label, text, y) {
  * @param {string} [params.ocrText]        - OCR text from document scan
  * @param {object} [params.labFindings]    - Parsed lab values { key: value, key_status: '...' }
  * @param {string[]} [params.labAlerts]    - Rule-based lab alerts
+ * @param {object} [params.firstAid]       - { firstAidTitle: {en,bn}, firstAidItems: [{en,bn}] }
+ * @param {string} [params.outputLanguage] - 'en' | 'bn' — script for the first-aid section
  * @returns {{ filename: string, pageCount: number }}
  */
 export function generatePhysicianPdf({
@@ -570,6 +627,8 @@ export function generatePhysicianPdf({
   ocrText = '',
   labFindings = {},
   labAlerts = [],
+  firstAid = null,
+  outputLanguage = 'en',
 } = {}) {
   if (!verdict) {
     throw new Error('generatePhysicianPdf: verdict is required.');
@@ -617,6 +676,13 @@ export function generatePhysicianPdf({
 
   y = drawSectionTitle(doc, y, 'Recommended Actions');
   y = drawBulletList(doc, verdict.recommended_actions, y);
+  y = ensureSpace(doc, y, 4);
+
+  // First-aid block — patient-facing self-care in the case's recorded
+  // language. Sits between Recommended Actions (clinician) and Referral
+  // Recommendation so a printed copy can be handed directly to the family.
+  y = ensureSpace(doc, y, 8);
+  y = drawFirstAid(doc, firstAid, outputLanguage, y);
   y = ensureSpace(doc, y, 4);
 
   y = drawSectionTitle(doc, y, 'Referral Recommendation');

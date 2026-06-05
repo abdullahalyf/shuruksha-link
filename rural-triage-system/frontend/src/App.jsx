@@ -10,6 +10,8 @@ import CaseHistory from './components/CaseHistory.jsx';
 import { checkVitals } from './utils/checkVitals.js';
 import { parseMedicalReport } from './utils/parseMedicalReport.js';
 import { healthUrl, triageUrl } from './utils/apiBase.js';
+import { evaluateRedFlags } from './utils/redFlags.js';
+import { generateFirstAid } from './utils/firstAidRules.js';
 import {
   loadHistory,
   saveCase,
@@ -44,6 +46,7 @@ export default function App() {
   const [voiceText, setVoiceText] = useState('');
   const [ocrText, setOcrText] = useState('');
   const [triageState, setTriageState] = useState(INITIAL_TRIAGE_STATE);
+  const [outputLanguage, setOutputLanguage] = useState('en');
   const status = getStatusMeta(apiStatus);
 
   // Recompute alerts in the parent so they can be sent with the triage request.
@@ -55,6 +58,25 @@ export default function App() {
   const { labs: labFindings, labAlerts } = useMemo(
     () => parseMedicalReport(ocrText),
     [ocrText]
+  );
+
+  // Red-flag evaluation runs on the client BEFORE the request is sent. It is
+  // a deterministic safety net that forces a CRITICAL verdict + immediate
+  // referral regardless of what the LLM produces. The same flag is passed
+  // to the backend so the safety floor logic there can also use it.
+  const redFlags = useMemo(
+    () => evaluateRedFlags({ vitals, voiceText, ocrText }),
+    [vitals, voiceText, ocrText]
+  );
+
+  // Deterministic first-aid recommendations derived from the same alert
+  // signals (vitals + lab patterns) the safety floor uses. Re-runs whenever
+  // any input changes, and is independent of the LLM verdict so it always
+  // shows up — even if the Gemini call fails — and so its language is
+  // controlled by the user-toggleable `outputLanguage` selector.
+  const firstAid = useMemo(
+    () => generateFirstAid({ vitals, alerts, labAlerts, language: outputLanguage }),
+    [vitals, alerts, labAlerts, outputLanguage]
   );
 
   // Local case history (LocalStorage-backed). Re-loaded on mount; refreshed
@@ -73,12 +95,55 @@ export default function App() {
     setVoiceText(caseRecord.voiceText || '');
     setOcrText(caseRecord.ocrText || '');
     setTriageState({ status: 'success', verdict: caseRecord });
+    // Restore the language the case was captured in so the first-aid panel
+    // and any future re-render of the verdict both stay in the same script.
+    if (caseRecord.outputLanguage) {
+      setOutputLanguage(caseRecord.outputLanguage);
+    }
     // Scroll the user up to the AI Assistant panel so they can see the
     // re-rendered verdict immediately.
     if (typeof window !== 'undefined') {
       window.scrollTo({ top: 0, behavior: 'smooth' });
     }
   };
+
+  // Show the red emergency banner whenever red flags are active. This sits
+  // ABOVE the AI verdict in the AI Assistant panel so the CHW sees it first.
+  const emergencyBanner = redFlags.emergency && (
+    <div
+      role="alert"
+      aria-live="assertive"
+      className="mb-4 rounded-2xl border-2 border-rose-400 bg-gradient-to-br from-rose-600 to-red-700 text-white p-4 shadow-lg shadow-rose-900/30"
+    >
+      <div className="flex items-start gap-3">
+        <span
+          className="h-9 w-9 shrink-0 rounded-full bg-white text-rose-700 grid place-items-center font-extrabold text-lg shadow"
+          aria-hidden="true"
+        >
+          !
+        </span>
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-extrabold uppercase tracking-wider">
+            Emergency red flags detected
+          </p>
+          <p className="text-xs font-semibold opacity-90 mt-0.5">
+            গুরুতর জরুরি অবস্থা · Refer to hospital immediately
+          </p>
+          <ul className="mt-2 space-y-1 text-sm leading-relaxed">
+            {redFlags.reasons.map((r, i) => (
+              <li key={i} className="flex items-start gap-2">
+                <span
+                  className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-white"
+                  aria-hidden="true"
+                />
+                <span>{r}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      </div>
+    </div>
+  );
 
   const handleDeleteCase = (id) => {
     removeCaseFromHistory(id);
@@ -135,6 +200,11 @@ export default function App() {
           ocrText,
           labFindings,
           labAlerts,
+          redFlags: {
+            emergency: redFlags.emergency,
+            reasons: redFlags.reasons,
+          },
+          outputLanguage,
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -167,6 +237,9 @@ export default function App() {
           ocrText,
           labFindings,
           labAlerts,
+          redFlags,
+          firstAid,
+          outputLanguage,
         });
         refreshHistory();
       } catch (persistErr) {
@@ -214,21 +287,56 @@ export default function App() {
             </div>
           </div>
 
-          {/* Status pill */}
-          <div
-            className={
-              'inline-flex items-center gap-2.5 rounded-full border px-3.5 py-1.5 shadow-sm ' +
-              status.chip
-            }
-            aria-live="polite"
-          >
-            <span className={'h-2.5 w-2.5 rounded-full ' + status.dot} aria-hidden="true" />
-            <span className={'text-xs sm:text-sm font-semibold ' + status.text}>
-              API {status.tone === 'online' ? 'Online' : status.tone === 'checking' ? 'Checking…' : 'Offline'}
-            </span>
-            <span className="hidden sm:inline text-xs text-slate-500 max-w-[16rem] truncate">
-              {apiStatus}
-            </span>
+          {/* Status pill + language selector */}
+          <div className="flex items-center gap-3 flex-wrap">
+            <div
+              className={
+                'inline-flex items-center gap-2.5 rounded-full border px-3.5 py-1.5 shadow-sm ' +
+                status.chip
+              }
+              aria-live="polite"
+            >
+              <span className={'h-2.5 w-2.5 rounded-full ' + status.dot} aria-hidden="true" />
+              <span className={'text-xs sm:text-sm font-semibold ' + status.text}>
+                API {status.tone === 'online' ? 'Online' : status.tone === 'checking' ? 'Checking…' : 'Offline'}
+              </span>
+              <span className="hidden sm:inline text-xs text-slate-500 max-w-[16rem] truncate">
+                {apiStatus}
+              </span>
+            </div>
+
+            {/* Output-language selector. Drives the Gemini prompt's
+                language block AND the FirstAidPanel's text selection.
+                The verdict panel and PDF are also rendered in the same
+                script so CHWs see a single consistent language. */}
+            <div
+              role="group"
+              aria-label="Output language"
+              className="inline-flex items-center rounded-full border border-slate-200 bg-white/80 backdrop-blur p-1 shadow-sm"
+            >
+              {[
+                { code: 'en', label: 'EN' },
+                { code: 'bn', label: 'বাংলা' },
+              ].map((opt) => {
+                const isActive = outputLanguage === opt.code;
+                return (
+                  <button
+                    key={opt.code}
+                    type="button"
+                    onClick={() => setOutputLanguage(opt.code)}
+                    aria-pressed={isActive}
+                    className={
+                      'px-3 py-1 rounded-full text-xs sm:text-sm font-semibold transition-colors duration-150 ' +
+                      (isActive
+                        ? 'bg-gradient-to-r from-sky-600 to-cyan-600 text-white shadow'
+                        : 'text-slate-600 hover:text-slate-900')
+                    }
+                  >
+                    {opt.label}
+                  </button>
+                );
+              })}
+            </div>
           </div>
         </header>
 
@@ -328,6 +436,7 @@ export default function App() {
               </div>
 
               <div className="relative mt-6 flex-1 rounded-xl border border-white/10 bg-white/5 backdrop-blur p-5 overflow-y-auto">
+                {emergencyBanner}
                 <TriageResult
                   state={triageState}
                   vitals={vitals}
@@ -336,6 +445,8 @@ export default function App() {
                   ocrText={ocrText}
                   labFindings={labFindings}
                   labAlerts={labAlerts}
+                  firstAid={firstAid}
+                  outputLanguage={outputLanguage}
                 />
               </div>
 

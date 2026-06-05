@@ -73,6 +73,8 @@ export function loadHistory() {
  * @param {string} [input.ocrText]        - OCR text snapshot
  * @param {object} [input.labFindings]    - Parsed lab values snapshot
  * @param {string[]} [input.labAlerts]    - Rule-based lab alerts snapshot
+ * @param {object} [input.firstAid]       - Bilingual first-aid snapshot
+ * @param {string} [input.outputLanguage] - 'en' | 'bn' snapshot
  * @returns {object|null} The saved case (with id + timestamp), or null on failure.
  */
 export function saveCase(input) {
@@ -98,6 +100,15 @@ export function saveCase(input) {
     ocrText: typeof input.ocrText === 'string' ? input.ocrText : '',
     labFindings: sanitize(input.labFindings) || {},
     labAlerts: Array.isArray(input.labAlerts) ? [...input.labAlerts] : [],
+    // Bilingual first-aid snapshot — used by the PDF and by the reopened
+    // case preview so the language and content stay locked to the case.
+    firstAid: sanitize(input.firstAid) || null,
+    // 'en' | 'bn' — drives the language picker on reopen so the user
+    // sees the verdict + first-aid in the same script they typed it in.
+    outputLanguage:
+      input.outputLanguage === 'bn' || input.outputLanguage === 'bangla'
+        ? 'bn'
+        : 'en',
   };
 
   const current = readAll();

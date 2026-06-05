@@ -202,7 +202,7 @@ const HIGH_LAB_PATTERNS = [
 
 const SEVERITY_RANK = { LOW: 0, MEDIUM: 1, HIGH: 2, CRITICAL: 3 };
 
-function applySafetyFloor(verdict, alerts, labAlerts) {
+function applySafetyFloor(verdict, alerts, labAlerts, redFlags) {
   let floor = 'LOW';
   let overrideReason = '';
 
@@ -237,9 +237,24 @@ function applySafetyFloor(verdict, alerts, labAlerts) {
     }
   }
 
+  // Emergency red-flag override (Step 16): if the frontend red-flag engine
+  // flagged the case as an emergency, force CRITICAL severity and an
+  // "immediate" referral. This is a hard floor - it is never downgraded
+  // back to a milder bucket.
+  const emergencyActive =
+    redFlags && redFlags.emergency === true &&
+    Array.isArray(redFlags.reasons) && redFlags.reasons.length > 0;
+  if (emergencyActive) {
+    floor = 'CRITICAL';
+    overrideReason = overrideReason || 'red-flag emergency';
+  }
+
   if (SEVERITY_RANK[floor] > SEVERITY_RANK[verdict.severity]) {
     const reasonSuffix = overrideReason
       ? ' (reason: ' + overrideReason + ')'
+      : '';
+    const reasonsLine = emergencyActive
+      ? ' Red-flag reasons: ' + redFlags.reasons.join('; ') + '.'
       : '';
     return {
       ...verdict,
@@ -249,24 +264,33 @@ function applySafetyFloor(verdict, alerts, labAlerts) {
         ' [Safety override: local anomaly detector raised severity to ' +
         floor +
         reasonSuffix +
-        '.]',
+        '.' +
+        reasonsLine +
+        ']',
     };
   }
+
+  // Even when the verdict's own severity is already at the floor, an
+  // emergency still forces the referral copy to be unambiguous.
+  if (emergencyActive) {
+    return {
+      ...verdict,
+      severity: 'CRITICAL',
+      referral:
+        'Refer to Upazila Health Complex / district hospital IMMEDIATELY. Do not delay - call for ambulance now.',
+    };
+  }
+
   return verdict;
 }
 
-// --- Prompt construction ---------------------------------------------------
-function buildPrompt(payload) {
-  const {
-    vitals = {},
-    alerts = [],
-    voiceTranscript = '',
-    ocrText = '',
-    labFindings = {},
-    labAlerts = [],
-  } = payload || {};
+// --- Prompt builder --------------------------------------------------------
+// Step 17: multilingual prompt. `outputLanguage` is 'en' (default) or 'bn'.
+function buildPrompt({ vitals, alerts, voiceTranscript, ocrText, labFindings, labAlerts, outputLanguage }) {
+  const safeAlerts = Array.isArray(alerts) ? alerts : [];
+  const safeLabAlerts = Array.isArray(labAlerts) ? labAlerts : [];
 
-  const v = (k) => (vitals[k] === '' || vitals[k] == null ? '—' : String(vitals[k]));
+  const v = (k) => (vitals && (vitals[k] === '' || vitals[k] == null) ? '-' : String(vitals[k]));
 
   // Render the structured lab findings into a compact text block. Only
   // include keys that have a numeric value; we leave the status tag in
@@ -277,6 +301,32 @@ function buildPrompt(payload) {
       const status = labFindings[`${k}_status`] || 'UNKNOWN';
       return `  - ${k}: ${labFindings[k]} (${status})`;
     });
+
+  // Step 17 — multilingual output. Only the four narrative fields
+  // (summary, possible_conditions, recommended_actions, referral) are
+  // translated; severity / confidence are enum keys and stay in English.
+  const language = (outputLanguage === 'bn' || outputLanguage === 'bangla') ? 'bn' : 'en';
+  const languageBlock = language === 'bn'
+    ? [
+        '',
+        'LANGUAGE — IMPORTANT:',
+        'Write all four narrative fields (summary, possible_conditions,',
+        'recommended_actions, referral) in natural Bengali (বাংলা). Use',
+        'Bangla script throughout. Keep the JSON keys in English. Keep',
+        'medical terms readable for a Community Health Worker (e.g.',
+        '"রক্তচাপ", "জ্বর", "ডায়রিয়া", "প্লাটিলেট"). Do not transliterate.',
+        'severity and confidence MUST remain in the English enum values',
+        '(LOW / MEDIUM / HIGH / CRITICAL, low / medium / high).',
+      ]
+    : [
+        '',
+        'LANGUAGE — IMPORTANT:',
+        'Write all four narrative fields (summary, possible_conditions,',
+        'recommended_actions, referral) in clear, simple English suitable',
+        'for a Community Health Worker. severity and confidence MUST',
+        'remain in the English enum values (LOW / MEDIUM / HIGH / CRITICAL,',
+        'low / medium / high).',
+      ];
 
   return [
     'You are a clinical decision-support assistant for Community Health Workers (CHWs)',
@@ -331,7 +381,7 @@ function buildPrompt(payload) {
     'higher severity. Keep summary under 60 words. Keep possible_conditions and',
     'recommended_actions to 3-6 short items each. Write referral in plain',
     'language the CHW can act on. Confidence reflects how complete the input was.',
-  ].join('\n');
+  ].concat(languageBlock).join('\n');
 }
 
 // --- Route handler ---------------------------------------------------------
@@ -344,7 +394,7 @@ router.post('/', async (req, res) => {
     });
   }
 
-  const { vitals, alerts, voiceTranscript, ocrText, labFindings, labAlerts } = req.body || {};
+  const { vitals, alerts, voiceTranscript, ocrText, labFindings, labAlerts, redFlags, outputLanguage } = req.body || {};
 
   // Basic shape check â€” don't waste a Gemini call on a totally empty payload.
   const hasLabs =
@@ -357,7 +407,13 @@ router.post('/', async (req, res) => {
     (ocrText && ocrText.trim().length > 0) ||
     hasLabs;
 
-  if (!hasAny) {
+  // An active emergency flag is treated as clinical data even if every other
+  // field is empty - we never reject an emergency as "no data".
+  const emergencyActive =
+    redFlags && redFlags.emergency === true &&
+    Array.isArray(redFlags.reasons) && redFlags.reasons.length > 0;
+
+  if (!hasAny && !emergencyActive) {
     return res.status(400).json({
       error:
         'No clinical data provided. Enter at least one vital, alert, voice note, or OCR text.',
@@ -366,7 +422,7 @@ router.post('/', async (req, res) => {
 
   try {
     const genAI = new GoogleGenerativeAI(apiKey);
-    const prompt = buildPrompt({ vitals, alerts, voiceTranscript, ocrText, labFindings, labAlerts });
+    const prompt = buildPrompt({ vitals, alerts, voiceTranscript, ocrText, labFindings, labAlerts, outputLanguage });
 
     let raw = '';
     let winningModel = null;
@@ -437,9 +493,10 @@ router.post('/', async (req, res) => {
       confidence: parsed.confidence || 'low',
     };
 
-    const safe = applySafetyFloor(verdict, alerts || [], labAlerts || []);
+    const safe = applySafetyFloor(verdict, alerts || [], labAlerts || [], redFlags);
 
-    console.log(`[triage] verdict served via ${winningModel} (severity=${safe.severity}).`);
+    const langTag = (outputLanguage === 'bn' || outputLanguage === 'bangla') ? 'bn' : 'en';
+    console.log(`[triage] verdict served via ${winningModel} (severity=${safe.severity}, lang=${langTag}).`);
     return res.json({ ok: true, verdict: safe, model: winningModel });
   } catch (err) {
     // Should be rare — non-Gemini error (e.g. prompt build failure).
