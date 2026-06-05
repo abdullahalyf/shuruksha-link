@@ -5,6 +5,7 @@
 // Right column : AI Assistant panel → TriageResult (empty/loading/error/data).
 
 import { useEffect, useMemo, useState } from 'react';
+import appLogo from './assets/app_logo.png';
 import VitalsForm from './components/VitalsForm.jsx';
 import TriageResult from './components/TriageResult.jsx';
 import CaseHistory from './components/CaseHistory.jsx';
@@ -391,22 +392,19 @@ export default function App() {
 
         {/* App header — brand bar */}
         <header className="mb-6 sm:mb-8 flex items-center justify-between gap-4 flex-wrap">
-          <div className="flex items-center gap-3">
-            <div className="h-12 w-12 rounded-xl bg-gradient-to-br from-sky-600 to-cyan-600 text-white grid place-items-center shadow-lg shadow-sky-600/20">
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2.2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                className="h-6 w-6"
-                aria-hidden="true"
-              >
-                <path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z" />
-              </svg>
-            </div>
+          <a
+            href="/"
+            aria-label="Shuruksha Link — go to home"
+            className="flex items-center gap-3 rounded-xl focus:outline-none focus-visible:ring-4 focus-visible:ring-sky-300 transition-opacity hover:opacity-90"
+          >
+            <img
+              src={appLogo}
+              alt="Shuruksha Link logo"
+              width="48"
+              height="48"
+              className="h-10 w-auto sm:h-12 shrink-0 select-none"
+              draggable="false"
+            />
             <div>
               <h1 className="text-2xl sm:text-3xl font-bold text-slate-900 tracking-tight">
                 Shuruksha Link
@@ -415,7 +413,7 @@ export default function App() {
                 Rural triage workstation · <span className="text-slate-500">চিকিৎসা সহায়তা</span>
               </p>
             </div>
-          </div>
+          </a>
 
           {/* Status pill + language selector */}
           <div className="flex items-center gap-3 flex-wrap">
@@ -606,8 +604,37 @@ export default function App() {
           />
         </div>
 
-        <footer className="mt-8 text-center text-xs text-slate-500">
-          Shuruksha Link · Built for Community Health Workers · Not a substitute for a physician.
+        <footer className="mt-10 pt-6 border-t border-slate-200/70 text-center text-slate-500">
+          <p className="text-xs sm:text-sm leading-relaxed">
+            Shuruksha Link · Built for Community Health Workers · Not a substitute for a physician.
+          </p>
+          <p className="mt-2 text-xs sm:text-sm text-slate-600">
+            Developed by <span className="font-semibold text-slate-800">Abdullah Alif</span>
+          </p>
+          <a
+            href="https://www.instagram.com/ab.alyf/"
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label="Abdullah Alif Instagram Profile"
+            className="mt-1.5 inline-flex items-center gap-1.5 text-xs sm:text-sm text-slate-600 hover:text-sky-600 transition-colors duration-150 group"
+          >
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              className="h-4 w-4 shrink-0"
+              aria-hidden="true"
+            >
+              <rect x="2" y="2" width="20" height="20" rx="5" ry="5" />
+              <path d="M16 11.37A4 4 0 1 1 12.63 8 4 4 0 0 1 16 11.37z" />
+              <line x1="17.5" y1="6.5" x2="17.51" y2="6.5" />
+            </svg>
+            <span className="group-hover:underline underline-offset-2">@ab.alyf</span>
+          </a>
         </footer>
       </div>
     </div>
