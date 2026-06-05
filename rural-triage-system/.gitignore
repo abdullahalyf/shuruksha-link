@@ -14,10 +14,17 @@ build/
 .env.production.local
 
 # Logs
+*.log
+*.err
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
-*.log
+
+# Generated PDFs
+*.pdf
+
+# Temporary repro/test files
+repro-*.mjs
 
 # OS
 .DS_Store
@@ -31,4 +38,10 @@ Thumbs.db
 
 # Vite
 *.local
+
+# Puku
 .puku/
+
+# Uploads (optional)
+backend/uploads/*
+!backend/uploads/.gitkeep
