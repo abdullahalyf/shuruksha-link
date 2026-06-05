@@ -13,6 +13,7 @@
 //     Thin divider line underneath.
 //
 //   Page 1
+//     0. PATIENT INFORMATION     (Name | Age | Gender | Phone | Address — black/gray table)
 //     1. PATIENT VITALS          (Parameter | Value | Unit | Status, pills)
 //     2. ANOMALY FINDINGS        (numbered list)
 //     3. LAB FINDINGS            (Parameter | Result | Unit | Status, pills)
@@ -24,7 +25,7 @@
 //     7. RECOMMENDED ACTIONS     (numbered list)
 //     8. FIRST AID RECOMMENDATIONS (checkmark list)
 //     9. REFERRAL RECOMMENDATION (paragraph)
-//    10. VOICE TRANSCRIPT        (monospace bordered block)
+//    10. VOICE TRANSCRIPT / SYMPTOMS NOTES (monospace bordered block)
 //    11. OCR EXTRACTED TEXT      (monospace bordered block)
 //
 //   Footer (every page)
@@ -376,6 +377,72 @@ function drawSeverityStrip(doc, severity, confidence) {
   return y + stripH + 4;
 }
 
+// --- Section 0: PATIENT INFORMATION (table) ------------------------------
+// Step 21 — demographics captured at intake. Pure black/gray print, no
+// Bengali, no color. Two-column layout: bold slate-600 label, regular
+// slate-900 value. Empty fields render as a muted em-dash placeholder.
+function drawPatientInfoTable(doc, patientInfo, y) {
+  const pi = (patientInfo && typeof patientInfo === 'object') ? patientInfo : {};
+  const rows = [
+    { label: 'Patient Name',  value: (pi.name    || '').toString().trim() },
+    { label: 'Age',           value: Number.isFinite(Number(pi.age))
+                                  ? `${Number(pi.age)} years` : '' },
+    { label: 'Gender',        value: (pi.gender  || '').toString().trim() },
+    { label: 'Phone',         value: (pi.phone   || '').toString().trim() },
+    { label: 'Address',       value: (pi.address || '').toString().trim() },
+  ];
+
+  const labelColW = 42;   // mm — fixed label column
+  const valueColX = MARGIN_X + labelColW;
+  const valueColW = CONTENT_W - labelColW;
+  const rowH = 7;
+
+  // Outer border + bottom rule (clinical look, no fill).
+  setDraw(doc, COLOR.ink);
+  doc.setLineWidth(0.4);
+  doc.rect(MARGIN_X, y, CONTENT_W, rowH * rows.length + 1);
+
+  rows.forEach((r, i) => {
+    const rowY = y + i * rowH;
+    const textY = rowY + 4.6;
+
+    // Vertical separator between label and value
+    setDraw(doc, COLOR.rule);
+    doc.setLineWidth(0.2);
+    doc.line(valueColX, rowY, valueColX, rowY + rowH);
+
+    // Label (bold, slate-600)
+    setText(doc, COLOR.inkMuted);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(9.5);
+    doc.text(r.label, MARGIN_X + 2, textY);
+
+    // Value (regular, slate-900) — wrap if longer than value column.
+    const trimmed = (r.value || '').trim();
+    if (trimmed) {
+      setText(doc, COLOR.ink);
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(10);
+      const lines = doc.splitTextToSize(trimmed, valueColW - 4);
+      doc.text(lines, valueColX + 2, textY);
+    } else {
+      setText(doc, COLOR.inkFaint);
+      doc.setFont('helvetica', 'italic');
+      doc.setFontSize(9.5);
+      doc.text('—', valueColX + 2, textY);
+    }
+
+    // Horizontal hairline between rows (skip after last).
+    if (i < rows.length - 1) {
+      setDraw(doc, COLOR.rule);
+      doc.setLineWidth(0.1);
+      doc.line(MARGIN_X, rowY + rowH, MARGIN_X + CONTENT_W, rowY + rowH);
+    }
+  });
+
+  return y + rowH * rows.length + 3;
+}
+
 // --- Section 1: PATIENT VITALS (table) -----------------------------------
 function drawVitalsTable(doc, vitals, y) {
   const colX = [MARGIN_X, MARGIN_X + 80, MARGIN_X + 110, MARGIN_X + CONTENT_W];
@@ -558,8 +625,9 @@ function drawMonoBlock(doc, label, text, y) {
  * tables, thin rules, monochrome body, and color used ONLY for the
  * severity strip and status pills.
  *
- * Section order (11 sections total):
- *   Page 1 — 1 Patient Vitals, 2 Anomaly Findings, 3 Lab Findings, 4 Lab Alerts
+ * Section order (12 sections total):
+ *   Page 1 — 0 Patient Information, 1 Patient Vitals, 2 Anomaly Findings,
+ *            3 Lab Findings, 4 Lab Alerts
  *   Page 2 — 5 Clinical Summary, 6 Possible Conditions, 7 Recommended Actions,
  *            8 First Aid Recommendations, 9 Referral Recommendation,
  *           10 Voice Transcript, 11 OCR Extracted Text
@@ -574,6 +642,9 @@ function drawMonoBlock(doc, label, text, y) {
  * @param {string[]} [params.labAlerts]    - Rule-based lab alerts
  * @param {object} [params.firstAid]       - { firstAidTitle: {en,bn}, firstAidItems: [{en,bn}] }
  *                                           (PDF renders the English form only)
+ * @param {object} [params.patientInfo]    - { name, age, gender, phone, address }
+ *                                           Step 21 — rendered as Section 0 on page 1.
+ *                                           English-only, black/gray print, no Bengali.
  * @param {string} [params.outputLanguage] - Accepted for API compatibility.
  *                                           The PDF is always English.
  * @returns {{ filename: string, pageCount: number }}
@@ -587,6 +658,7 @@ export function generatePhysicianPdf({
   labFindings = {},
   labAlerts = [],
   firstAid = null,
+  patientInfo = {},
   outputLanguage = 'en', // accepted but ignored — PDF is English-only
 } = {}) {
   if (!verdict) {
@@ -598,7 +670,7 @@ export function generatePhysicianPdf({
   const reportId = `SL-${generatedAt.getTime()}`;
 
   // =====================================================================
-  // PAGE 1 — header, severity strip, sections 1..4
+  // PAGE 1 — header, severity strip, sections 0..4
   // =====================================================================
   drawHeader(doc, {
     severity: verdict.severity,
@@ -606,6 +678,11 @@ export function generatePhysicianPdf({
     generatedAt,
   });
   let y = drawSeverityStrip(doc, verdict.severity, verdict.confidence);
+
+  // 0. PATIENT INFORMATION (Step 21)
+  y = drawSectionTitle(doc, y, 'Patient Information');
+  y = drawPatientInfoTable(doc, patientInfo, y);
+  y = ensureSpace(doc, y, 4);
 
   // 1. PATIENT VITALS
   y = drawSectionTitle(doc, y, 'Patient Vitals');
@@ -673,7 +750,7 @@ export function generatePhysicianPdf({
   y = ensureSpace(doc, y, 4);
 
   // 10. VOICE TRANSCRIPT  (monospace bordered block)
-  y = drawMonoBlock(doc, 'Voice Transcript', voiceTranscript, y);
+  y = drawMonoBlock(doc, 'Voice Transcript / Symptoms Notes', voiceTranscript, y);
   y = ensureSpace(doc, y, 4);
 
   // 11. OCR EXTRACTED TEXT (monospace bordered block)

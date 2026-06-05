@@ -286,11 +286,26 @@ function applySafetyFloor(verdict, alerts, labAlerts, redFlags) {
 
 // --- Prompt builder --------------------------------------------------------
 // Step 17: multilingual prompt. `outputLanguage` is 'en' (default) or 'bn'.
-function buildPrompt({ vitals, alerts, voiceTranscript, ocrText, labFindings, labAlerts, outputLanguage }) {
+// Step 21: patient demographics (name, age, gender, phone, address) are
+// passed in as `patientInfo` and rendered as a dedicated block at the top of
+// the user content. Age and gender are required; phone/address are optional.
+function buildPrompt({ patientInfo, vitals, alerts, voiceTranscript, ocrText, labFindings, labAlerts, outputLanguage }) {
   const safeAlerts = Array.isArray(alerts) ? alerts : [];
   const safeLabAlerts = Array.isArray(labAlerts) ? labAlerts : [];
 
   const v = (k) => (vitals && (vitals[k] === '' || vitals[k] == null) ? '-' : String(vitals[k]));
+
+  // Step 21: build the patient information block. Missing / blank fields
+  // are rendered as "-" so the model can still reason about partial data
+  // (e.g. phone and address are optional).
+  const pi = patientInfo && typeof patientInfo === 'object' ? patientInfo : {};
+  const piName = String(pi.name || '').trim() || '-';
+  const piAgeRaw = pi.age;
+  const piAgeNum = Number(piAgeRaw);
+  const piAge = Number.isFinite(piAgeNum) ? String(piAgeNum) : '-';
+  const piGender = String(pi.gender || '').trim() || '-';
+  const piPhone = String(pi.phone || '').trim() || '-';
+  const piAddress = String(pi.address || '').trim() || '-';
 
   // Render the structured lab findings into a compact text block. Only
   // include keys that have a numeric value; we leave the status tag in
@@ -334,7 +349,33 @@ function buildPrompt({ vitals, alerts, voiceTranscript, ocrText, labFindings, la
     'patient needs immediate referral, urgent care within hours, routine follow-up,',
     'or can be observed at home.',
     '',
-    'Patient context:',
+    'PATIENT INFORMATION (Step 21 — demographics captured by the CHW at intake):',
+    `- Name:    ${piName}`,
+    `- Age:     ${piAge} years`,
+    `- Gender:  ${piGender}`,
+    `- Phone:   ${piPhone}`,
+    `- Address: ${piAddress}`,
+    '',
+    'AGE and GENDER — IMPORTANT:',
+    'Age and gender MUST be considered when generating possible_conditions,',
+    'recommended_actions, referral recommendations, and severity. The same',
+    'vital reading means very different things in different age / gender groups.',
+    'Worked examples of how to reason:',
+    '  - An elderly patient (age 65+) with low SpO2  -> suspect pneumonia /',
+    '    COPD exacerbation / heart failure, lower the threshold for CRITICAL',
+    '    severity and same-day referral.',
+    '  - A young child (age < 5) with high fever     -> suspect severe',
+    '    infection / dehydration / sepsis, upgrade severity and recommend',
+    '    urgent facility evaluation rather than home observation.',
+    '  - A female patient of reproductive age with abdominal pain,',
+    '    bleeding, or fainting                       -> consider pregnancy-',
+    '    related emergencies (ectopic pregnancy, miscarriage, obstetric',
+    '    hemorrhage) and recommend same-day evaluation; do not default to',
+    '    benign explanations.',
+    'Always tailor possible_conditions and recommended_actions to the',
+    'patient\'s age band and gender; never produce a generic answer.',
+    '',
+    'Patient context (vitals captured by the CHW):',
     `- Blood pressure: ${v('bp')} mmHg`,
     `- Heart rate: ${v('heartRate')} bpm`,
     `- Temperature: ${v('temperature')} °C`,
@@ -394,7 +435,7 @@ router.post('/', async (req, res) => {
     });
   }
 
-  const { vitals, alerts, voiceTranscript, ocrText, labFindings, labAlerts, redFlags, outputLanguage } = req.body || {};
+  const { patientInfo, vitals, alerts, voiceTranscript, ocrText, labFindings, labAlerts, redFlags, outputLanguage } = req.body || {};
 
   // Basic shape check â€” don't waste a Gemini call on a totally empty payload.
   const hasLabs =
@@ -405,7 +446,12 @@ router.post('/', async (req, res) => {
     (Array.isArray(alerts) && alerts.length > 0) ||
     (voiceTranscript && voiceTranscript.trim().length > 0) ||
     (ocrText && ocrText.trim().length > 0) ||
-    hasLabs;
+    hasLabs ||
+    // Step 21: a non-empty patient registration card also counts as input.
+    (patientInfo && typeof patientInfo === 'object' &&
+      (String(patientInfo.name || '').trim().length > 0 ||
+       String(patientInfo.phone || '').trim().length > 0 ||
+       String(patientInfo.address || '').trim().length > 0));
 
   // An active emergency flag is treated as clinical data even if every other
   // field is empty - we never reject an emergency as "no data".
@@ -422,7 +468,7 @@ router.post('/', async (req, res) => {
 
   try {
     const genAI = new GoogleGenerativeAI(apiKey);
-    const prompt = buildPrompt({ vitals, alerts, voiceTranscript, ocrText, labFindings, labAlerts, outputLanguage });
+    const prompt = buildPrompt({ patientInfo, vitals, alerts, voiceTranscript, ocrText, labFindings, labAlerts, outputLanguage });
 
     let raw = '';
     let winningModel = null;

@@ -1,9 +1,14 @@
 // VoiceCapture — UI for the Web Speech Recognition API.
 // Self-contained: uses the useSpeechRecognition hook for all state.
-// Optional props: `onTranscriptChange(value)` keeps the parent in sync
-// so the triage engine can consume the latest text.
+// Optional props:
+//   `onTranscriptChange(value)` keeps the parent in sync so the triage
+//   engine, Gemini request, case history, and PDF all consume the
+//   latest text. The component exposes a unified symptoms input: the
+//   user can speak OR type into the same textarea. Voice-recognized
+//   text is appended to whatever the user has typed; manual edits
+//   are never overwritten.
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { SUPPORTED_LANGS, useSpeechRecognition } from '../hooks/useSpeechRecognition.js';
 
 export default function VoiceCapture({ onTranscriptChange }) {
@@ -20,17 +25,73 @@ export default function VoiceCapture({ onTranscriptChange }) {
     setLang: applyLang,
   } = useSpeechRecognition({ lang });
 
-  // Bubble transcript changes up to the parent (App.jsx).
+  // Unified symptoms buffer. This is the single source of truth for the
+  // parent — voice recognition appends into it, the user types into it.
+  const [text, setText] = useState('');
+  // Track what we've already consumed from the hook so we can compute
+  // the delta on each new transcript update.
+  const lastHookTranscriptRef = useRef('');
+  // Pause appending while the user is actively typing, so we don't yank
+  // the caret out from under them. The interim word is still surfaced
+  // via a separate live-status line below the textarea.
+  const textareaRef = useRef(null);
+
+  // Keep the parent in sync on every edit (typing OR voice append).
   useEffect(() => {
     if (typeof onTranscriptChange === 'function') {
-      onTranscriptChange(transcript || '');
+      onTranscriptChange(text);
     }
-  }, [transcript, onTranscriptChange]);
+  }, [text, onTranscriptChange]);
+
+  // When the hook emits a new final-transcript value, append the delta
+  // into the unified buffer. We never clobber text the user typed.
+  useEffect(() => {
+    if (!transcript) {
+      lastHookTranscriptRef.current = '';
+      return;
+    }
+    const previous = lastHookTranscriptRef.current;
+    if (transcript === previous) return;
+
+    // Compute the new tail the hook added since we last looked.
+    let delta = '';
+    if (transcript.startsWith(previous)) {
+      delta = transcript.slice(previous.length);
+    } else {
+      // The hook rewound (e.g. user changed language). Treat the whole
+      // transcript as the new chunk.
+      delta = transcript;
+    }
+    lastHookTranscriptRef.current = transcript;
+
+    if (!delta) return;
+
+    setText((current) => {
+      if (!current) return current + delta;
+      // If the buffer doesn't end with whitespace and the delta doesn't
+      // start with punctuation, insert a single space so the merged
+      // text reads naturally.
+      const needsSpace =
+        !/\s$/.test(current) &&
+        !/^[\s.,;:!?]/.test(delta);
+      return current + (needsSpace ? ' ' : '') + delta;
+    });
+  }, [transcript]);
 
   const handleLangChange = (e) => {
     const next = e.target.value;
     setLang(next);
     applyLang(next);
+  };
+
+  const handleTextareaChange = (e) => {
+    setText(e.target.value);
+  };
+
+  const handleClear = () => {
+    setText('');
+    lastHookTranscriptRef.current = '';
+    reset();
   };
 
   // Not supported — render a graceful, non-broken panel.
@@ -98,9 +159,9 @@ export default function VoiceCapture({ onTranscriptChange }) {
             aria-hidden="true"
           />
           <h3 className="text-sm font-semibold text-slate-800 uppercase tracking-wide">
-            Voice Symptoms Capture
+            Symptoms Input
             <span className="ml-1.5 text-xs font-normal text-slate-500 normal-case">
-              / লক্ষণ বলুন
+              / লক্ষণ বলুন বা লিখুন
             </span>
           </h3>
         </div>
@@ -197,10 +258,10 @@ export default function VoiceCapture({ onTranscriptChange }) {
           {isListening ? '● Recording…' : 'Idle'}
         </div>
 
-        {transcript && (
+        {text && (
           <button
             type="button"
-            onClick={reset}
+            onClick={handleClear}
             className="
               h-10 px-3 rounded-lg text-xs font-semibold
               text-slate-600 bg-white border border-slate-300
@@ -209,33 +270,35 @@ export default function VoiceCapture({ onTranscriptChange }) {
               transition-colors
             "
           >
-            Clear transcript
+            Clear symptoms
           </button>
         )}
       </div>
 
-      {/* Live transcript panel */}
-      <div
-        className="
-          mt-4 min-h-[5.5rem]
-          rounded-lg border border-slate-200 bg-white/80 backdrop-blur
-          p-3.5 text-sm text-slate-800
-          shadow-inner shadow-slate-900/[0.02]
-        "
-        aria-live="polite"
-      >
-        {transcript || interim ? (
-          <p className="leading-relaxed whitespace-pre-wrap">
-            <span className="font-medium text-slate-900">{transcript}</span>
-            {interim && (
-              <span className="text-slate-500 italic"> {interim}</span>
-            )}
-          </p>
-        ) : (
-          <p className="text-slate-400 italic">
-            {isListening
-              ? 'Listening… speak symptoms in the selected language.'
-              : 'Transcript will appear here once you start listening.'}
+      {/* Unified symptoms textarea — user can type, speak, or both.
+          The hook appends recognized final text into this same buffer;
+          manual edits are never overwritten. */}
+      <div className="mt-4">
+        <textarea
+          ref={textareaRef}
+          value={text}
+          onChange={handleTextareaChange}
+          rows={4}
+          placeholder="Speak or type patient symptoms here..."
+          aria-label="Patient symptoms (type or dictate)"
+          className="
+            w-full min-h-[5.5rem] resize-y
+            rounded-lg border border-slate-200 bg-white/80 backdrop-blur
+            p-3.5 text-sm text-slate-800 leading-relaxed
+            shadow-inner shadow-slate-900/[0.02]
+            placeholder:text-slate-400 placeholder:italic
+            focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-sky-500
+            transition-colors
+          "
+        />
+        {isListening && interim && (
+          <p className="mt-1.5 text-xs text-slate-500 italic" aria-live="polite">
+            hearing: {interim}
           </p>
         )}
       </div>

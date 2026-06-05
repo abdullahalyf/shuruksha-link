@@ -1,12 +1,14 @@
 // Shuruksha Link — Frontend root component
 // Layout: gradient header → status pill → 2-column dashboard.
-// Left column  : VitalsForm (intake + voice + OCR) + Process Triage button.
+// Left column  : PatientInfoForm (Step 21) → VitalsForm (intake + voice + OCR)
+//                + Process Triage button.
 // Right column : AI Assistant panel → TriageResult (empty/loading/error/data).
 
 import { useEffect, useMemo, useState } from 'react';
 import VitalsForm from './components/VitalsForm.jsx';
 import TriageResult from './components/TriageResult.jsx';
 import CaseHistory from './components/CaseHistory.jsx';
+import PatientInfoForm from './components/PatientInfoForm.jsx';
 import { checkVitals } from './utils/checkVitals.js';
 import { parseMedicalReport } from './utils/parseMedicalReport.js';
 import { healthUrl, triageUrl } from './utils/apiBase.js';
@@ -26,6 +28,27 @@ const EMPTY_VITALS = {
   oxygen: '',
   glucose: '',
 };
+
+// Step 21: Patient Information Module. Required: name, age, gender.
+// Optional: phone, address. Bilingual UI handled inside the component.
+const EMPTY_PATIENT_INFO = {
+  name: '',
+  age: '',
+  gender: '',
+  phone: '',
+  address: '',
+};
+
+function isPatientInfoComplete(pi) {
+  if (!pi) return false;
+  const name = String(pi.name || '').trim();
+  const age = Number(pi.age);
+  const gender = String(pi.gender || '').trim();
+  if (!name) return false;
+  if (!Number.isFinite(age) || age < 0 || age > 120) return false;
+  if (!gender) return false;
+  return true;
+}
 
 // Status pill metadata — kept here so the dot/text colors stay in sync.
 function getStatusMeta(message) {
@@ -47,6 +70,9 @@ export default function App() {
   const [ocrText, setOcrText] = useState('');
   const [triageState, setTriageState] = useState(INITIAL_TRIAGE_STATE);
   const [outputLanguage, setOutputLanguage] = useState('en');
+  // Step 21: Patient Information Module — flows into Gemini prompt,
+  // case history, PDF, and TriageResult header.
+  const [patientInfo, setPatientInfo] = useState(EMPTY_PATIENT_INFO);
   const status = getStatusMeta(apiStatus);
 
   // Recompute alerts in the parent so they can be sent with the triage request.
@@ -94,6 +120,9 @@ export default function App() {
     setVitals(caseRecord.vitals || EMPTY_VITALS);
     setVoiceText(caseRecord.voiceText || '');
     setOcrText(caseRecord.ocrText || '');
+    // Step 21: restore patient information too so the result panel, PDF,
+    // and Gemini request all line up with the historical case.
+    setPatientInfo(caseRecord.patientInfo || EMPTY_PATIENT_INFO);
     setTriageState({ status: 'success', verdict: caseRecord });
     // Restore the language the case was captured in so the first-aid panel
     // and any future re-render of the verdict both stay in the same script.
@@ -188,12 +217,30 @@ export default function App() {
   }, []);
 
   const handleProcessTriage = async () => {
+    // Step 21: gate the request on a complete patient-registration card.
+    // Name + Age (0-120) + Gender are required. Phone/Address are optional.
+    if (!isPatientInfoComplete(patientInfo)) {
+      setTriageState({
+        status: 'error',
+        error:
+          'Please complete the Patient Information section before processing triage (Name, Age, and Gender are required).',
+      });
+      return;
+    }
+
     setTriageState({ status: 'loading' });
     try {
       const res = await fetch(triageUrl(), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          patientInfo: {
+            name: String(patientInfo.name || '').trim(),
+            age: Number(patientInfo.age),
+            gender: String(patientInfo.gender || '').trim(),
+            phone: String(patientInfo.phone || '').trim(),
+            address: String(patientInfo.address || '').trim(),
+          },
           vitals,
           alerts,
           voiceTranscript: voiceText,
@@ -231,6 +278,7 @@ export default function App() {
       try {
         saveCase({
           verdict: data.verdict,
+          patientInfo,
           vitals,
           alerts,
           voiceText,
@@ -343,6 +391,9 @@ export default function App() {
         {/* Two-column dashboard: left = intake, right = AI assistant panel */}
         <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
           <div className="lg:col-span-3 space-y-6">
+            {/* Step 21: Patient Information card — required before triage. */}
+            <PatientInfoForm patient={patientInfo} onChange={setPatientInfo} />
+
             <VitalsForm
               vitals={vitals}
               onChange={setVitals}
@@ -447,6 +498,7 @@ export default function App() {
                   labAlerts={labAlerts}
                   firstAid={firstAid}
                   outputLanguage={outputLanguage}
+                  patientInfo={patientInfo}
                 />
               </div>
 

@@ -75,6 +75,7 @@ export function loadHistory() {
  * @param {string[]} [input.labAlerts]    - Rule-based lab alerts snapshot
  * @param {object} [input.firstAid]       - Bilingual first-aid snapshot
  * @param {string} [input.outputLanguage] - 'en' | 'bn' snapshot
+ * @param {object} [input.patientInfo]    - { name, age, gender, phone, address } patient demographics snapshot (Step 21)
  * @returns {object|null} The saved case (with id + timestamp), or null on failure.
  */
 export function saveCase(input) {
@@ -109,6 +110,9 @@ export function saveCase(input) {
       input.outputLanguage === 'bn' || input.outputLanguage === 'bangla'
         ? 'bn'
         : 'en',
+    // Step 21 — patient demographics captured at intake. Stored on the
+    // case so reopen, PDF export, and audit logs all see the same person.
+    patientInfo: sanitize(input.patientInfo) || {},
   };
 
   const current = readAll();

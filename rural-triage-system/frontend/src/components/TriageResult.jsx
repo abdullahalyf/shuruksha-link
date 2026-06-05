@@ -188,6 +188,7 @@ function DownloadPhysicianPdf({
   labFindings,
   labAlerts,
   firstAid = null,
+  patientInfo = {},
   outputLanguage = 'en',
 }) {
   const [busy, setBusy] = useState(false);
@@ -210,6 +211,7 @@ function DownloadPhysicianPdf({
         labFindings,
         labAlerts,
         firstAid,
+        patientInfo,
         outputLanguage,
       });
       setFilename(name);
@@ -287,8 +289,22 @@ export default function TriageResult({
   labFindings = {},
   labAlerts = [],
   firstAid = null,
+  patientInfo = {},
   outputLanguage = 'en',
 }) {
+  // Step 21 — compact professional display above the severity banner.
+  // Only render when the CHW actually entered demographics; otherwise
+  // (e.g. a reopened legacy case without a patientInfo field) the line
+  // is hidden so the layout stays clean.
+  const patientLine = (() => {
+    const pi = patientInfo && typeof patientInfo === 'object' ? patientInfo : {};
+    const name = String(pi.name || '').trim();
+    if (!name) return null;
+    const ageNum = Number(pi.age);
+    const age = Number.isFinite(ageNum) ? String(ageNum) : '';
+    const gender = String(pi.gender || '').trim();
+    return { name, age, gender };
+  })();
   const status = state?.status || 'idle';
 
   if (status === 'loading') {
@@ -305,6 +321,30 @@ export default function TriageResult({
     const conf = CONFIDENCE_META[v.confidence] || CONFIDENCE_META.low;
     return (
       <div className="space-y-3">
+        {/* Step 21 — compact patient identity line. Sits above the
+            severity banner so the clinician can read the AI verdict in
+            the context of a specific person. */}
+        {patientLine && (
+          <div className="text-sm font-medium text-slate-600 flex flex-wrap items-center gap-x-2 gap-y-0.5">
+            <span>
+              Patient:{' '}
+              <span className="text-slate-900 font-semibold">{patientLine.name}</span>
+            </span>
+            {patientLine.age && (
+              <>
+                <span className="text-slate-300">·</span>
+                <span>Age: <span className="text-slate-900 font-semibold">{patientLine.age}</span></span>
+              </>
+            )}
+            {patientLine.gender && (
+              <>
+                <span className="text-slate-300">·</span>
+                <span>Gender: <span className="text-slate-900 font-semibold">{patientLine.gender}</span></span>
+              </>
+            )}
+          </div>
+        )}
+
         {/* Severity banner */}
         <div
           className={
@@ -326,6 +366,7 @@ export default function TriageResult({
                 labFindings={labFindings}
                 labAlerts={labAlerts}
                 firstAid={firstAid}
+                patientInfo={patientInfo}
                 outputLanguage={outputLanguage}
               />
             </div>
